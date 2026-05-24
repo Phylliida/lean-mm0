@@ -184,7 +184,7 @@ accept something false — only reject something true.
 d2c7c9a  Eq.symm, Eq.trans in stdlib; succ_add and add_comm proofs
 be3e47f  Tiny tactic monad: by rfl/exact/intro
 39daebb  Handoff doc
-<next>   apply + assumption tactics; subgoal-aware seq
+e579ba5  apply + assumption tactics; subgoal-aware seq
 ```
 
 ### `383b984` — initial commit
@@ -239,7 +239,7 @@ The skeleton with everything that works:
 - `_elab_lam_with_expected`: propagates expected type through outer Lams
   so tactics inside see their goal
 
-### `<next>` — apply + assumption tactics
+### `e579ba5` — apply + assumption tactics
 
 - `apply f`: elaborates `f`, peels every leading Π as a fresh meta
   (implicit / inst-implicit go to deferred synthesis; explicit ones
