@@ -153,6 +153,10 @@ def test_parse_and_verify_decidable_compose():
     _run_example("decidable_compose.lean")
 
 
+def test_parse_and_verify_nat_inj():
+    _run_example("nat_inj.lean")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in list(globals().items()) if k.startswith("test_")]
     passed = failed = 0
