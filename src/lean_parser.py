@@ -40,9 +40,11 @@ from .expr import (
 # ---------------- tactic registry ----------------
 # Tactic AST nodes are stored as Python tuples in a global registry; the
 # `By(tac_id)` AST node carries an index into it.  Tactic forms:
-#   ("exact", expr)
+#   ("exact", expr, bvar_stack)
 #   ("rfl",)
-#   ("intro", str, sub_tac)     -- intro x; <sub_tac>
+#   ("intro", str, sub_tac)        -- intro x; <sub_tac>
+#   ("apply", expr, bvar_stack)    -- apply f; <one tactic per subgoal>
+#   ("assumption",)
 #   ("seq", [tac1, tac2, ...])
 
 _TACTIC_REGISTRY: List[tuple] = []
@@ -74,7 +76,7 @@ KEYWORDS = {"def", "axiom", "theorem", "example", "instance",
             "infix", "infixl", "infixr",
             "fun", "lam", "let", "in",
             "Sort", "Type", "Prop", "forall", "match", "with", "where",
-            "by", "exact", "rfl", "intro",
+            "by", "exact", "rfl", "intro", "apply", "assumption",
             "->", "=>", ":=", ":", ",", ";",
             "(", ")", ".{", "}", "|", "[", "]"}
 
@@ -129,7 +131,8 @@ def lex(src: str) -> List[Tok]:
                                     "fun", "lam", "let", "in",
                                     "Sort", "Type", "Prop",
                                     "forall", "match", "with", "where",
-                                    "by", "exact", "rfl", "intro"} else "id"
+                                    "by", "exact", "rfl", "intro",
+                                    "apply", "assumption"} else "id"
             out.append(Tok(kind, text, i)); i = j; continue
         raise SyntaxError(f"unexpected character {c!r} at {i}")
     return out
@@ -749,6 +752,13 @@ class P:
             self.take()
             e = self.parse_expr(lvl_params, bvar_stack)
             return ("exact", e, list(bvar_stack))
+        if t.text == "apply":
+            self.take()
+            e = self.parse_expr(lvl_params, bvar_stack)
+            return ("apply", e, list(bvar_stack))
+        if t.text == "assumption":
+            self.take()
+            return ("assumption",)
         if t.text == "intro":
             self.take()
             name_tok = self.take()

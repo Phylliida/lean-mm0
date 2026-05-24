@@ -11,10 +11,10 @@ trust boundary.
 
 | | |
 |---|---|
-| Tests | **88 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 21 parser examples) |
-| Total source | ~7.3 kLoC Python + 188 LoC MM0 prelude + 708 LoC `.lean` examples |
+| Tests | **89 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 22 parser examples) |
+| Total source | ~6.0 kLoC Python + 188 LoC MM0 prelude + 740 LoC `.lean` examples |
 | Trusted base | `src/mm0_verify.py` (669 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 5 commits on `master`; clean working tree |
+| Repo | 7 commits on `master`; clean working tree |
 
 ## What the pipeline does
 
@@ -150,7 +150,9 @@ What the parser accepts and the elaborator handles:
 | `exact e` | elaborate `e` against the goal |
 | `rfl` | if goal is `Eq α a b` with `a ≡ b`, produce `Eq.refl α a` |
 | `intro x` | if goal is `Π x : T, U`, push `x` to ctx and run the rest of the block with the body as the new goal |
-| `t1; t2; ...` | sequence (intro's body is `t2; ...`) |
+| `apply f` | elaborate `f`, peel its Π binders as fresh metas, unify the return type with the goal; explicit metas the unifier didn't pin become subgoals |
+| `assumption` | succeed if some local hypothesis (innermost-first) is def-equal to the goal |
+| `t1; t2; ...` | sequence — `apply` deposits subgoals into a queue, subsequent tactics drain them in order |
 
 ## Trust boundary detail
 
@@ -173,7 +175,7 @@ accept something false — only reject something true.
 
 ## What's been built (chronological)
 
-5 commits, each adding a coherent slice:
+7 commits, each adding a coherent slice:
 
 ```
 383b984  Initial commit: lean-mm0 prototype
@@ -181,6 +183,8 @@ accept something false — only reject something true.
 5c4e219  List operations + first non-trivial induction proof
 d2c7c9a  Eq.symm, Eq.trans in stdlib; succ_add and add_comm proofs
 be3e47f  Tiny tactic monad: by rfl/exact/intro
+39daebb  Handoff doc
+<next>   apply + assumption tactics; subgoal-aware seq
 ```
 
 ### `383b984` — initial commit
@@ -234,6 +238,20 @@ The skeleton with everything that works:
 - New `By(tac_id)` AST node + tactic registry in `lean_parser`
 - `_elab_lam_with_expected`: propagates expected type through outer Lams
   so tactics inside see their goal
+
+### `<next>` — apply + assumption tactics
+
+- `apply f`: elaborates `f`, peels every leading Π as a fresh meta
+  (implicit / inst-implicit go to deferred synthesis; explicit ones
+  are candidate subgoals), unifies the function's return type with the
+  goal, returns explicit metas the unifier didn't auto-pin as subgoals
+- `assumption`: walks `ctx.entries` innermost-first, returns the first
+  FVar whose type is def-equal to the goal
+- Tactic interpreter now returns `(term, [subgoal_meta_ids])`; `seq`
+  drains the subgoal queue using subsequent `;`-chained tactics
+- Top-level `by` and `intro` both error if subgoals survive their scope
+  (intro's `fv` can't appear in escaping subgoal types in this prototype)
+- New example `apply.lean` (7 examples)
 
 ## Headline examples
 
@@ -334,7 +352,7 @@ Compared to a production Lean / mathlib stack, the major missing pieces:
 |---|---|---|
 | `Decidable` / `if then else` | not implemented | requires Decidable typeclass + propagation through elaboration |
 | `simp`, rewriting tactic | not implemented | needs the tactic monad to be more general |
-| `apply` tactic (with subgoal generation) | not implemented | needs deeper unification + goal-state management |
+| `apply` tactic (with subgoal generation) | basic version implemented | a full version would handle subgoals escaping `intro` and named goals |
 | Full `match` syntax in `def` (`def f \| 0 => 0 \| succ k => k`) | not implemented | needs equation compiler |
 | Mutual inductives w/ cross-recursor | partial (constructors only) | needs the "tag-encoding" pass |
 | Notation/macro system | minimal (only `infix*`) | real Lean macros are a programmable language |
@@ -349,15 +367,17 @@ up" below.
 
 Pieces ordered by impact and tractability:
 
-1. **`apply` tactic** — Substantial but well-scoped.  Given a function
-   `f` whose return type unifies with the goal, generate subgoals for
-   each of f's arguments.  Builds on existing unification.
-   Touches: `src/elaborator.py` _run_tactic.
-
-2. **`Decidable` + `if then else`** — Inductive type with two ctors
+1. **`Decidable` + `if then else`** — Inductive type with two ctors
    plus elaboration of `if EXPR then ... else ...` to a
    `Decidable.casesOn` invocation.  Notation system probably needs to be
    richer than what's there.  ~200 LoC.
+
+2. **`apply` subgoals escaping `intro`** — Currently the tactic monad
+   refuses to let an unsolved subgoal cross an `intro` boundary (the
+   `fv` would dangle).  The fix is to abstract the subgoal's type into
+   a Π over the introduced binder and reassign the meta with a Lam.
+   Unlocks `intro h; apply f h` style proofs where `f` produces a goal
+   referencing `h`.
 
 3. **Recursion-on-multiple-args / dependent match** — Currently match
    only handles non-dependent motives.  A small extension is to let the
@@ -367,8 +387,9 @@ Pieces ordered by impact and tractability:
    `add_comm` pattern; would build out a real `Nat` namespace.  ~1 page
    each.  Pure source-side work, no engine changes.
 
-5. **More tactics** — `assumption` (linear search through ctx for goal),
-   `simp` (rewrite using an equation database).
+5. **More tactics** — `rewrite` (instantiate `Eq.mpr` / `Eq.rec` with
+   HOP motive), `simp` (rewrite using an equation database), `revert`
+   (the inverse of `intro`, needed to make subgoals abstractable).
 
 6. **Notation/macro system** — Generalise `infix` to arbitrary mixfix
    notation like `notation:50 "[" a "," b "]" => Prod.mk a b`.

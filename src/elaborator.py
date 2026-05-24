@@ -646,15 +646,32 @@ class Elaborator:
             ctx.pop()
 
     # -- tactic interpreter --
+    #
+    # Each tactic returns `(term, subgoal_meta_ids)`.  Tactics that solve
+    # the goal completely return an empty subgoal list.  `apply` may
+    # return non-empty subgoals — meta IDs that subsequent tactics in the
+    # `;`-sequence must fill in order.  `seq` drains the subgoal queue
+    # using the rest of the tactics.
 
     def _run_tactic_by(self, by_node: By, goal: Expr, ctx: LocalCtx) -> Expr:
         """Top-level entry point for `by TAC`.  Runs the tactic against
         `goal` in the elaborator's current context, returns the term."""
         from .lean_parser import get_tactic
         tac = get_tactic(by_node.tac_id)
-        return self._run_tactic(tac, goal, ctx)
+        term, subs = self._run_tactic(tac, goal, ctx)
+        # Any leftover subgoals at the top level are an error — they
+        # should have been drained by `seq`.  (A leftover that's been
+        # auto-pinned by unification is fine.)
+        unresolved = [m for m in subs if self.mctx.get(m) is None]
+        if unresolved:
+            tys = "; ".join(
+                show_expr(self.mctx.instantiate(self.mctx.get_type(m)))
+                for m in unresolved)
+            raise ElabError(f"unsolved subgoals after tactic block: {tys}")
+        return self.mctx.instantiate(term)
 
-    def _run_tactic(self, tac: tuple, goal: Expr, ctx: LocalCtx) -> Expr:
+    def _run_tactic(self, tac: tuple, goal: Expr,
+                    ctx: LocalCtx) -> Tuple[Expr, List[int]]:
         kind = tac[0]
         if kind == "rfl":
             # Goal must be `Eq.{u} α a b` with a ≡ b (defeq).
@@ -671,7 +688,7 @@ class Elaborator:
                     f"  lhs = {show_expr(self.mctx.instantiate(a))}\n"
                     f"  rhs = {show_expr(self.mctx.instantiate(b))}")
             lvls = head.levels
-            return App(App(Const("Eq.refl", lvls), α), a)
+            return App(App(Const("Eq.refl", lvls), α), a), []
 
         if kind == "exact":
             _, expr, _bvar_stack = tac
@@ -680,7 +697,67 @@ class Elaborator:
             # has FVars for each prior `intro`).
             expr_r = _resolve_bvars(expr, ctx)
             e_elab, _ = self.elab(expr_r, goal, ctx)
-            return e_elab
+            return e_elab, []
+
+        if kind == "assumption":
+            # Walk local FVars innermost-first; succeed on the first
+            # whose type is def-equal to the goal.
+            goal_inst = self.mctx.instantiate(goal)
+            for name, fv_ty, _val in reversed(ctx.entries):
+                if self.kernel.def_eq(fv_ty, goal_inst, ctx):
+                    return FVar(name, fv_ty), []
+            raise ElabError(
+                f"assumption: no hypothesis matches goal "
+                f"{show_expr(goal_inst)}")
+
+        if kind == "apply":
+            _, expr, _bvar_stack = tac
+            expr_r = _resolve_bvars(expr, ctx)
+            # Elaborate without an expected type — we want the full
+            # function type so we can peel it ourselves.
+            e_elab, e_ty = self.elab(expr_r, None, ctx)
+            # Peel every leading Π, generating a fresh meta for each
+            # binder.  Track explicit metas as candidate subgoals;
+            # inst-implicit metas get synthesised after unification.
+            explicit_metas: List[int] = []
+            inst_metas: List[Tuple[Meta, Expr]] = []
+            cur_ty = self.mctx.instantiate(e_ty)
+            cur_ty_w = self.kernel.whnf(cur_ty, ctx)
+            cur_ty_w = self.mctx.instantiate(cur_ty_w)
+            while isinstance(cur_ty_w, Pi):
+                m = self.mctx.fresh(cur_ty_w.dom)
+                e_elab = App(e_elab, m)
+                if cur_ty_w.inst_implicit:
+                    inst_metas.append((m, cur_ty_w.dom))
+                elif not cur_ty_w.implicit:
+                    explicit_metas.append(m.id)
+                cur_ty = subst_bvar(cur_ty_w.body, 0, m)
+                cur_ty = self.mctx.instantiate(cur_ty)
+                cur_ty_w = self.kernel.whnf(cur_ty, ctx)
+                cur_ty_w = self.mctx.instantiate(cur_ty_w)
+            # Unify the function's return type with the goal.  This is
+            # what pins the implicit/inst metas (and potentially some
+            # explicit ones too).
+            if not unify(cur_ty, goal, ctx, self.mctx, self.kernel,
+                         type_of=lambda x: self._infer_elaborated(x, ctx)):
+                if not self.kernel.def_eq(cur_ty, goal, ctx):
+                    raise ElabError(
+                        f"apply: function's return type doesn't match goal:\n"
+                        f"  goal     {show_expr(self.mctx.instantiate(goal))}\n"
+                        f"  function {show_expr(self.mctx.instantiate(cur_ty))}")
+            # Synthesise inst-implicit metas (now their types are pinned).
+            for m, dom in inst_metas:
+                if self.mctx.get(m.id) is not None:
+                    continue
+                sub = self._synthesize(self.mctx.instantiate(dom), ctx)
+                if sub is None:
+                    raise ElabError(
+                        f"apply: failed to synthesize instance for "
+                        f"{show_expr(self.mctx.instantiate(dom))}")
+                self.mctx.assign(m.id, sub)
+            # Only return explicit metas that unification didn't auto-solve.
+            remaining = [m for m in explicit_metas if self.mctx.get(m) is None]
+            return e_elab, remaining
 
         if kind == "intro":
             _, name, sub_tac = tac
@@ -693,27 +770,59 @@ class Elaborator:
             fv = ctx.push(name, dom)
             try:
                 body_goal = open_(goal_w.body, FVar(fv, dom))
-                body_e = self._run_tactic(sub_tac, body_goal, ctx)
+                body_e, body_subs = self._run_tactic(sub_tac, body_goal, ctx)
                 body_e = self.mctx.instantiate(body_e)
-                return Lam(name, dom, close(body_e, fv))
+                # Body must fully resolve — subgoals can't escape the
+                # introduced binder in this prototype (they'd reference
+                # the popped fv).
+                unresolved = [m for m in body_subs
+                              if self.mctx.get(m) is None]
+                if unresolved:
+                    tys = "; ".join(
+                        show_expr(self.mctx.instantiate(
+                            self.mctx.get_type(m))) for m in unresolved)
+                    raise ElabError(
+                        f"intro: subgoals can't escape introduced binder "
+                        f"{name!r}: {tys}")
+                return Lam(name, dom, close(body_e, fv)), []
             finally:
                 ctx.pop()
 
         if kind == "seq":
             _, tacs = tac
-            # For seq, run tactics in order, threading what's left to prove.
-            # For our minimal model, only the LAST tactic produces the
-            # final term; earlier tactics that aren't `intro` (which
-            # nests its body via parsing) wouldn't change the goal here.
-            # So we just run them and use the result of the last.
             if not tacs:
                 raise ElabError("empty tactic sequence")
-            *prelude, last = tacs
-            # Each non-`intro` tactic in `prelude` is essentially a no-op
-            # for our minimal model; we still type-check them.
-            for t in prelude:
-                _ = self._run_tactic(t, goal, ctx)
-            return self._run_tactic(last, goal, ctx)
+            first, *rest = tacs
+            main_term, sub_metas = self._run_tactic(first, goal, ctx)
+            queue = list(sub_metas)
+            rest_iter = iter(rest)
+            while True:
+                # Skip subgoals that unification has already pinned.
+                while queue and self.mctx.get(queue[0]) is not None:
+                    queue.pop(0)
+                if not queue:
+                    break
+                meta_id = queue.pop(0)
+                try:
+                    sub_tac = next(rest_iter)
+                except StopIteration:
+                    meta_ty = self.mctx.instantiate(
+                        self.mctx.get_type(meta_id))
+                    raise ElabError(
+                        f"unsolved subgoal: ?m{meta_id} : "
+                        f"{show_expr(meta_ty)}")
+                meta_ty = self.mctx.instantiate(self.mctx.get_type(meta_id))
+                sub_term, sub_metas_new = self._run_tactic(
+                    sub_tac, meta_ty, ctx)
+                sub_term = self.mctx.instantiate(sub_term)
+                self.mctx.assign(meta_id, sub_term)
+                queue.extend(sub_metas_new)
+            extra = list(rest_iter)
+            if extra:
+                raise ElabError(
+                    f"extra tactics after all goals solved "
+                    f"({len(extra)} unused)")
+            return self.mctx.instantiate(main_term), []
 
         raise ElabError(f"unknown tactic kind: {kind}")
 
