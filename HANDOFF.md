@@ -11,10 +11,10 @@ trust boundary.
 
 | | |
 |---|---|
-| Tests | **94 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 27 parser examples) |
-| Total source | ~6.3 kLoC Python + 188 LoC MM0 prelude + 893 LoC `.lean` examples |
+| Tests | **95 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 28 parser examples) |
+| Total source | ~6.3 kLoC Python + 188 LoC MM0 prelude + 1008 LoC `.lean` examples |
 | Trusted base | `src/mm0_verify.py` (669 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 16 commits on `master`; clean working tree |
+| Repo | 18 commits on `master`; clean working tree |
 
 ## What the pipeline does
 
@@ -197,6 +197,8 @@ bcc9dc8  HANDOFF for dependent match
 cbb4c96  Mid-seq intros via contextful subgoals
 971dea0  HANDOFF for mid-seq intros
 6ffe236  Indexed-inductive match v1 (non-recursive ctors)
+1c7635b  HANDOFF for indexed-inductive match v1
+474b45b  Nat lemmas: add_zero/mul_zero/mul_one/add_assoc/zero_mul/one_mul
 ```
 
 ### `383b984` — initial commit
@@ -282,6 +284,20 @@ The skeleton with everything that works:
   inst slot would dangle)
 - New example `decidable.lean` (7 examples; includes nested ite, a
   `def choose` taking an explicit `Decidable c`, both branches verified)
+
+### `474b45b` — Nat lemmas
+
+`examples/nat_lemmas.lean`:
+
+- `add_zero (n) : n + 0 = n` — Eq.refl (Nat.add recurses on second arg)
+- `mul_zero (n) : n * 0 = 0` — Eq.refl (same)
+- `mul_one (n) : n * 1 = n` — Eq.refl (n * 1 unfolds to n + 0 unfolds to n)
+- `add_assoc (a b c) : (a+b)+c = a+(b+c)` — induction on c
+- `zero_mul (n) : 0 * n = 0` — induction on n, uses Eq.rec to lift IH
+- `one_mul  (n) : 1 * n = n` — induction on n, uses `succ_add` and `zero_add` from math.lean (via file chaining)
+
+The test runner now accepts multiple filenames: `_run_example("math.lean",
+"nat_lemmas.lean")` so a file can build on prior files' lemmas.
 
 ### `6ffe236` — indexed-inductive match v1
 
@@ -475,9 +491,10 @@ up" below.
 
 Pieces ordered by impact and tractability:
 
-1. **`Nat.mul_comm`, `Nat.add_assoc`, `Nat.mul_one`** — Each follows the
-   `add_comm` pattern; would build out a real `Nat` namespace.  ~1 page
-   each.  Pure source-side work, no engine changes.
+1. **`Nat.mul_comm` and friends** — `add_assoc`, `mul_one`, `zero_mul`,
+   `one_mul`, `mul_zero`, `add_zero` are done (`nat_lemmas.lean`).
+   `mul_comm`, `mul_assoc`, `left_distrib`, `right_distrib` are next.
+   Each is ~1-2 pages of induction + rewrite, no engine changes.
 
 2. **More tactics** — `rewrite` (instantiate `Eq.mpr` / `Eq.rec` with
    HOP motive), `simp` (rewrite using an equation database), `revert`
