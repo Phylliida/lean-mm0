@@ -49,7 +49,8 @@ class Tok:
 
 
 KEYWORDS = {"def", "axiom", "theorem", "example", "instance",
-            "inductive", "structure", "class", "infix", "infixl", "infixr",
+            "inductive", "structure", "class", "extends",
+            "infix", "infixl", "infixr",
             "fun", "lam", "let", "in",
             "Sort", "Type", "Prop", "forall", "match", "with", "where",
             "->", "=>", ":=", ":", ",", ";",
@@ -102,7 +103,7 @@ def lex(src: str) -> List[Tok]:
             text = src[i:j]
             kind = "kw" if text in {"def", "axiom", "theorem", "example",
                                     "instance", "inductive", "structure", "class",
-                                    "infix", "infixl", "infixr",
+                                    "extends", "infix", "infixl", "infixr",
                                     "fun", "lam", "let", "in",
                                     "Sort", "Type", "Prop",
                                     "forall", "match", "with", "where"} else "id"
@@ -391,9 +392,16 @@ class P:
             self.take()
             result_ty = self.parse_expr(lvl_params, [p[0] for p in params])
         else:
-            # default to Type 1 (Sort 2) — caller picks something else by writing : Type u
             from .levels import LSucc, LZero
             result_ty = Sort(LSucc(LZero()))
+        # optional extends clause:  extends T1, T2, ...
+        extends_clauses: List[Expr] = []
+        if self.at("extends"):
+            self.take()
+            extends_clauses.append(self.parse_app(lvl_params, [p[0] for p in params]))
+            while self.at(","):
+                self.take()
+                extends_clauses.append(self.parse_app(lvl_params, [p[0] for p in params]))
         self.eat("where")
         # fields: each one `(name : T)`.  Bare `name : T` is also accepted,
         # but only when there's a single field (the parser can't otherwise
@@ -427,6 +435,35 @@ class P:
                 fields.append((fname, fty, False, False))
                 break
             break
+        # Prepend each `extends T` as a synthetic field named `to<Parent>`.
+        # User-written field types were parsed assuming scope =
+        # [params + user_fields_so_far], so they need to be shifted to
+        # account for the additional `extends`-fields prepended below.
+        if extends_clauses:
+            from .expr import shift as _shft
+            extended_fields = []
+            for k, parent_ty in enumerate(extends_clauses):
+                head_e = parent_ty
+                while isinstance(head_e, App):
+                    head_e = head_e.fn
+                if not isinstance(head_e, Const):
+                    raise SyntaxError(
+                        f"extends clause must be a class application; got {head_e}")
+                parent_name = head_e.name.split(".")[-1]
+                field_name = f"to{parent_name}"
+                # Shift parent_ty up by k (for prior extends fields in scope).
+                shifted = _shft(parent_ty, k)
+                extended_fields.append((field_name, shifted, False, False))
+            n_ext = len(extends_clauses)
+            # Shift each user-written field's type up by n_ext, but
+            # with a cutoff that preserves references to previous user
+            # fields.  Field at index j has access to params + first j
+            # user fields, so cutoff = j.
+            shifted_user_fields = []
+            for j, (fn, fty, fi, fii) in enumerate(fields):
+                shifted_user_fields.append(
+                    (fn, _shft(fty, n_ext, j), fi, fii))
+            fields = extended_fields + shifted_user_fields
         return ("structure", name, lvl_params, params, result_ty, fields, is_class)
 
     def _next_keyword(self) -> bool:
@@ -688,17 +725,26 @@ class P:
 
 def _replace_rec_call(e: Expr, rec_name: str,
                       target_bvar_idx: int, sentinel_name: str) -> Expr:
-    """Walk e; replace `App(Const(rec_name, _), BVar(target_bvar_idx))`
-    with FVar(sentinel_name, *).  Adjusts target_bvar_idx through binders."""
+    """Walk e; whenever we find an App-spine whose head is
+    `Const(rec_name)` and whose LAST arg is `BVar(target_bvar_idx)`,
+    replace the whole spine with `FVar(sentinel_name)`.  This handles
+    both `f rec_arg` and `f extra1 extra2 ... rec_arg` (multi-arg
+    structural recursion where earlier args are passed unchanged)."""
     if isinstance(e, App):
-        fn = _replace_rec_call(e.fn, rec_name, target_bvar_idx, sentinel_name)
-        # check pattern: fn is Const(rec_name) and arg is BVar(target_idx)
-        if (isinstance(fn, Const) and fn.name == rec_name
-                and isinstance(e.arg, BVar) and e.arg.idx == target_bvar_idx):
+        # peel the spine and check
+        head = e
+        args = []
+        while isinstance(head, App):
+            args.insert(0, head.arg)
+            head = head.fn
+        if (isinstance(head, Const) and head.name == rec_name and args
+                and isinstance(args[-1], BVar)
+                and args[-1].idx == target_bvar_idx):
             from .expr import Sort as _Sort
             return FVar(sentinel_name, _Sort(LZero()))
-        arg = _replace_rec_call(e.arg, rec_name, target_bvar_idx, sentinel_name)
-        return App(fn, arg)
+        # otherwise recurse into both fn and arg
+        return App(_replace_rec_call(e.fn, rec_name, target_bvar_idx, sentinel_name),
+                   _replace_rec_call(e.arg, rec_name, target_bvar_idx, sentinel_name))
     if isinstance(e, (Sort, BVar, FVar, Const, Meta)):
         return e
     if isinstance(e, Lam):

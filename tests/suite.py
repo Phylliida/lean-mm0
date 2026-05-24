@@ -394,18 +394,7 @@ def b_nested_let(env):
 
 
 def b_nat_pred(env):
-    # Nat.pred : Nat → Nat := λ n, Nat.rec.{1} (λ _. Nat) 0 (λ k _. k) n
-    one = LSucc(LZero())
-    rec = app_many(
-        Const("Nat.rec", (one,)),
-        Lam("_", Nat, Nat),                              # motive
-        Const("Nat.zero", ()),                            # base
-        Lam("k", Nat, Lam("_ih", Nat, BVar(1))),         # step: ignore ih, return k
-        BVar(0),                                          # major = n
-    )
-    val = Lam("n", Nat, rec)
-    ty = Pi("n", Nat, Nat)
-    env.add(Definition("Nat.pred", (), ty, val))
+    # Nat.pred is now built into the stdlib; this test just references it.
     return ["Nat.pred"]
 
 

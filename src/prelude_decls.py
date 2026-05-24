@@ -848,3 +848,16 @@ def _build_nat_ops(env: Env) -> None:
     mul_value = Lam("m", Nat, Lam("n", Nat, mul_rec_call))
     mul_type = Pi("m", Nat, Pi("n", Nat, Nat))
     env.add(Definition("Nat.mul", (), mul_type, mul_value))
+
+    # Nat.pred : Nat → Nat
+    # pred n = Nat.rec (λ _. Nat) 0 (λ k _. k) n
+    pred_rec_call = app_many(
+        Const("Nat.rec", (LSucc(LZero()),)),
+        Lam("_", Nat, Nat),                      # motive
+        Const("Nat.zero", ()),                   # m_zero = 0
+        Lam("k", Nat, Lam("_ih", Nat, BVar(1))),  # step: return k
+        BVar(0),                                  # major = n
+    )
+    pred_value = Lam("n", Nat, pred_rec_call)
+    pred_type = Pi("n", Nat, Nat)
+    env.add(Definition("Nat.pred", (), pred_type, pred_value))

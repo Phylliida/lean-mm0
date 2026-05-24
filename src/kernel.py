@@ -366,6 +366,9 @@ class Kernel:
             ta, da = self.infer(e.arg, ctx)
             eq_trace: List[EqDeriv] = []
             if not self.def_eq(ta, tf_w.dom, ctx, eq_trace):
+                import os
+                if os.environ.get('KERNEL_DEBUG'):
+                    print('KERNEL App: fn=', show_expr(e.fn), 'arg=', show_expr(e.arg))
                 raise TypeError_(
                     f"argument type mismatch:\n"
                     f"  expected {show_expr(tf_w.dom)}\n"
