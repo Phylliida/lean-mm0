@@ -149,6 +149,10 @@ def test_parse_and_verify_rewrite():
     _run_example("rewrite.lean")
 
 
+def test_parse_and_verify_decidable_compose():
+    _run_example("decidable_compose.lean")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in list(globals().items()) if k.startswith("test_")]
     passed = failed = 0
