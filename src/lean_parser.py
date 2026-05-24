@@ -552,25 +552,34 @@ class P:
                 return e
         if t.text == "fun" or t.text == "lam":
             self.take()
-            self.eat("(")
-            # multi-name: (p q r : T)
-            names = []
-            first = self.take()
-            if first.kind != "id":
-                raise SyntaxError("binder name expected")
-            names.append(first.text)
-            while self.at_kind("id"):
-                names.append(self.take().text)
-            self.eat(":")
-            ty = self.parse_expr(lvl_params, bvar_stack)
-            self.eat(")")
-            self.eat("=>")
+            # Accept one or more (name1 name2 ... : T) blocks before `=>`.
             from .expr import shift as _shift_e
-            body = self.parse_expr(lvl_params, bvar_stack + names)
-            # wrap inside-out: Lam(name_0, ty, Lam(name_1, shifted_ty, ... body))
-            for k, nm in enumerate(reversed(names)):
-                ty_k = _shift_e(ty, len(names) - 1 - k)
-                body = Lam(nm, ty_k, body)
+            collected: List[Tuple[str, Expr]] = []  # (name, type-at-its-binding-position)
+            while self.at("("):
+                self.eat("(")
+                names = []
+                first = self.take()
+                if first.kind != "id":
+                    raise SyntaxError("binder name expected")
+                names.append(first.text)
+                while self.at_kind("id"):
+                    names.append(self.take().text)
+                self.eat(":")
+                ty = self.parse_expr(
+                    lvl_params,
+                    bvar_stack + [nm for nm, _ in collected])
+                self.eat(")")
+                base = len(collected)
+                for k, nm in enumerate(names):
+                    collected.append((nm, _shift_e(ty, k)))
+            if not collected:
+                raise SyntaxError("fun needs at least one binder")
+            self.eat("=>")
+            body = self.parse_expr(
+                lvl_params,
+                bvar_stack + [nm for nm, _ in collected])
+            for nm, ty in reversed(collected):
+                body = Lam(nm, ty, body)
             return body
         if t.text == "forall":
             self.take()
@@ -608,6 +617,7 @@ class P:
             # `current_decl_name` becomes the rec_name for IH compilation.
             rec_name = None
             scrut_ty_hint = None
+            rec_arg_pos = -1
             if isinstance(scrutinee, BVar) and self.current_decl_name is not None:
                 rec_name = self.current_decl_name
                 if self.current_decl_binders is not None:
@@ -615,16 +625,20 @@ class P:
                     idx_from_end = scrutinee.idx
                     if idx_from_end < len(binder_list):
                         b = binder_list[-(idx_from_end + 1)]
-                        # The stored type was parsed in scope of binders
-                        # 0..k-1 (all binders above us).  In body scope
-                        # there are extra binders below; BVars in the
-                        # type referring to those `above` binders must
-                        # shift up by (1 + scrutinee.idx) to remain valid.
                         from .expr import shift as _shft
                         scrut_ty_hint = _shft(b[1], 1 + scrutinee.idx)
+                        # Compute the rec arg's position in user-PARSED
+                        # recursive calls: matched arg's decl-index minus
+                        # the number of implicit binders before it.
+                        matched_decl_idx = len(binder_list) - 1 - idx_from_end
+                        n_implicit_before = sum(
+                            1 for bdr in binder_list[:matched_decl_idx]
+                            if bdr[2] or bdr[3])
+                        rec_arg_pos = matched_decl_idx - n_implicit_before
             return _compile_match(scrutinee, result_ty, arms, self.env,
                                   lvl_params, bvar_stack, rec_name=rec_name,
-                                  scrut_ty_hint=scrut_ty_hint)
+                                  scrut_ty_hint=scrut_ty_hint,
+                                  rec_arg_pos=rec_arg_pos)
         if t.text == "let":
             self.take()
             nm = self.take()
@@ -724,43 +738,54 @@ class P:
 
 
 def _replace_rec_call(e: Expr, rec_name: str,
-                      target_bvar_idx: int, sentinel_name: str) -> Expr:
+                      target_bvar_idx: int, sentinel_name: str,
+                      rec_arg_pos: int = -1) -> Expr:
     """Walk e; whenever we find an App-spine whose head is
-    `Const(rec_name)` and whose LAST arg is `BVar(target_bvar_idx)`,
-    replace the whole spine with `FVar(sentinel_name)`.  This handles
-    both `f rec_arg` and `f extra1 extra2 ... rec_arg` (multi-arg
-    structural recursion where earlier args are passed unchanged)."""
+    `Const(rec_name)` and whose argument at position `rec_arg_pos`
+    (0-indexed from the left, in the user's PARSED call — i.e. NOT
+    counting implicits the elaborator will insert) is
+    `BVar(target_bvar_idx)`, replace the whole spine with
+    `FVar(sentinel_name)`.
+
+    If `rec_arg_pos == -1`, fall back to "last arg" detection (used
+    by the Nat-fast-path)."""
     if isinstance(e, App):
-        # peel the spine and check
         head = e
         args = []
         while isinstance(head, App):
             args.insert(0, head.arg)
             head = head.fn
-        if (isinstance(head, Const) and head.name == rec_name and args
-                and isinstance(args[-1], BVar)
-                and args[-1].idx == target_bvar_idx):
+        match = False
+        if isinstance(head, Const) and head.name == rec_name and args:
+            if rec_arg_pos == -1:
+                idx = len(args) - 1
+            else:
+                idx = rec_arg_pos
+            if 0 <= idx < len(args):
+                a = args[idx]
+                if isinstance(a, BVar) and a.idx == target_bvar_idx:
+                    match = True
+        if match:
             from .expr import Sort as _Sort
             return FVar(sentinel_name, _Sort(LZero()))
-        # otherwise recurse into both fn and arg
-        return App(_replace_rec_call(e.fn, rec_name, target_bvar_idx, sentinel_name),
-                   _replace_rec_call(e.arg, rec_name, target_bvar_idx, sentinel_name))
+        return App(_replace_rec_call(e.fn, rec_name, target_bvar_idx, sentinel_name, rec_arg_pos),
+                   _replace_rec_call(e.arg, rec_name, target_bvar_idx, sentinel_name, rec_arg_pos))
     if isinstance(e, (Sort, BVar, FVar, Const, Meta)):
         return e
     if isinstance(e, Lam):
         return Lam(e.binder,
-                   _replace_rec_call(e.dom, rec_name, target_bvar_idx, sentinel_name),
-                   _replace_rec_call(e.body, rec_name, target_bvar_idx + 1, sentinel_name))
+                   _replace_rec_call(e.dom, rec_name, target_bvar_idx, sentinel_name, rec_arg_pos),
+                   _replace_rec_call(e.body, rec_name, target_bvar_idx + 1, sentinel_name, rec_arg_pos))
     if isinstance(e, Pi):
         return Pi(e.binder,
-                  _replace_rec_call(e.dom, rec_name, target_bvar_idx, sentinel_name),
-                  _replace_rec_call(e.body, rec_name, target_bvar_idx + 1, sentinel_name),
+                  _replace_rec_call(e.dom, rec_name, target_bvar_idx, sentinel_name, rec_arg_pos),
+                  _replace_rec_call(e.body, rec_name, target_bvar_idx + 1, sentinel_name, rec_arg_pos),
                   e.implicit, e.inst_implicit)
     if isinstance(e, Let):
         return Let(e.binder,
-                   _replace_rec_call(e.type_, rec_name, target_bvar_idx, sentinel_name),
-                   _replace_rec_call(e.value, rec_name, target_bvar_idx, sentinel_name),
-                   _replace_rec_call(e.body, rec_name, target_bvar_idx + 1, sentinel_name))
+                   _replace_rec_call(e.type_, rec_name, target_bvar_idx, sentinel_name, rec_arg_pos),
+                   _replace_rec_call(e.value, rec_name, target_bvar_idx, sentinel_name, rec_arg_pos),
+                   _replace_rec_call(e.body, rec_name, target_bvar_idx + 1, sentinel_name, rec_arg_pos))
     return e
 
 
@@ -806,7 +831,8 @@ def _compile_match(scrutinee: Expr, result_ty: Expr,
                    lvl_params: Tuple[str, ...] = (),
                    bvar_stack: Optional[List[str]] = None,
                    rec_name: Optional[str] = None,
-                   scrut_ty_hint: Optional[Expr] = None) -> Expr:
+                   scrut_ty_hint: Optional[Expr] = None,
+                   rec_arg_pos: int = -1) -> Expr:
     """Compile a `match` to a recursor application.
 
     Without env: Nat and Bool only.
@@ -852,7 +878,7 @@ def _compile_match(scrutinee: Expr, result_ty: Expr,
         SENT = "__rec_ih__"
         used_rec = False
         if rec_name is not None:
-            rhs_succ_new = _replace_rec_call(rhs_succ, rec_name, 0, SENT)
+            rhs_succ_new = _replace_rec_call(rhs_succ, rec_name, 0, SENT, rec_arg_pos)
             used_rec = (rhs_succ_new is not rhs_succ) or \
                        (_contains_fvar(rhs_succ_new, SENT))
             rhs_succ = rhs_succ_new
@@ -920,10 +946,12 @@ def _compile_match(scrutinee: Expr, result_ty: Expr,
     ind_lvls = head_e.levels
 
     # Build motive: λ _ : (ind_name lvls) params..., result_ty
+    # result_ty was parsed in the OUTER scope; inside the motive's `_`
+    # binder it sits one level deeper, so its BVars shift up by 1.
     ind_applied = Const(ind_name, ind_lvls)
     for pa in param_args:
         ind_applied = App(ind_applied, pa)
-    motive = Lam("_", ind_applied, result_ty)
+    motive = Lam("_", ind_applied, _se(result_ty, 1))
 
     # Build minors in ctor declaration order
     minors: List[Expr] = []
@@ -950,7 +978,7 @@ def _compile_match(scrutinee: Expr, result_ty: Expr,
             for k, p in enumerate(rec_rule_for_this.rec_arg_positions):
                 target_idx = cd.num_fields - 1 - p
                 sent_name = f"{SENT_BASE}{k}"
-                rhs = _replace_rec_call(rhs, rec_name, target_idx, sent_name)
+                rhs = _replace_rec_call(rhs, rec_name, target_idx, sent_name, rec_arg_pos)
                 rec_sentinels.append(sent_name)
         # The minor's expected shape:
         #   λ f_0:F_0. ... λ f_{k-1}:F_{k-1}.
@@ -1018,13 +1046,11 @@ def _compile_match(scrutinee: Expr, result_ty: Expr,
             minor_body = Lam(vs[j], field_types[j], minor_body)
         minors.append(minor_body)
 
-    # Build recursor application
-    motive_universe = LParam(rec_decl.motive_universe_param) \
-                      if rec_decl.motive_universe_param else LZero()
-    # we need to specify motive's level too.  We use Sort 1 (Type 0) as
-    # default — the user can pick anything when result_ty is closed.
-    rec_lvls = tuple(list(ind_lvls) + [LSucc(LZero())])
-    rec_head = Const(rec_decl.name, rec_lvls)
+    # Build recursor application.  Leave ALL level args empty so the
+    # elaborator auto-instantiates fresh level metas; they'll be solved
+    # by unification with the inductive's args (gives ind_lvls) and with
+    # the motive's body (gives the motive universe).
+    rec_head = Const(rec_decl.name, ())
     for pa in param_args:
         rec_head = App(rec_head, pa)
     rec_head = App(rec_head, motive)

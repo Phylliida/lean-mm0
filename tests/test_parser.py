@@ -101,6 +101,14 @@ def test_parse_and_verify_comparison():
     _run_example("comparison.lean")
 
 
+def test_parse_and_verify_list_ops():
+    _run_example("list_ops.lean")
+
+
+def test_parse_and_verify_math():
+    _run_example("math.lean")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in list(globals().items()) if k.startswith("test_")]
     passed = failed = 0
