@@ -11,10 +11,10 @@ trust boundary.
 
 | | |
 |---|---|
-| Tests | **91 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 24 parser examples) |
-| Total source | ~6.2 kLoC Python + 188 LoC MM0 prelude + 800 LoC `.lean` examples |
+| Tests | **92 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 25 parser examples) |
+| Total source | ~6.2 kLoC Python + 188 LoC MM0 prelude + 841 LoC `.lean` examples |
 | Trusted base | `src/mm0_verify.py` (669 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 11 commits on `master`; clean working tree |
+| Repo | 13 commits on `master`; clean working tree |
 
 ## What the pipeline does
 
@@ -124,7 +124,7 @@ What the parser accepts and the elaborator handles:
 | Implicit `{a : T}` binders | parser tags, elaborator inserts metas |
 | Instance-implicit `[a : T]` or `[T]` | elaborator does instance synthesis |
 | `@`-syntax | `@id.{1} Nat 3` — disable implicit insertion |
-| `match`/case | `match e : T with \| ... \| ...` (Nat, Bool, polymorphic List) |
+| `match`/case | `match e : T with \| ... \| ...` (Nat, Bool, polymorphic List); `(motive := M)` annotation for dependent matches |
 | Recursive `def` via top-level `match` | structural recursion → recursor IH (Nat, List) |
 | Numeric literals | `3` → `Nat.succ (Nat.succ (Nat.succ Nat.zero))` |
 | `by TAC` proofs | `by rfl`, `by intro x; exact x` |
@@ -191,6 +191,8 @@ e579ba5  apply + assumption tactics; subgoal-aware seq
 39389e2  Decidable + ite + if/then/else sugar; `_` holes
 0071567  HANDOFF for Decidable
 376402e  Real fix: intro is standalone; seq threads context through
+1f53363  HANDOFF for intro/seq refactor
+c05c399  (motive := M) annotation for dependent match
 ```
 
 ### `383b984` — initial commit
@@ -276,6 +278,22 @@ The skeleton with everything that works:
   inst slot would dangle)
 - New example `decidable.lean` (7 examples; includes nested ite, a
   `def choose` taking an explicit `Decidable c`, both branches verified)
+
+### `c05c399` — dependent match motive
+
+Optional `(motive := M)` annotation before the scrutinee:
+```lean
+match (motive := fun (k : Nat) => Eq.{1} Nat k k) n with
+| Nat.zero   => Eq.refl.{1} Nat Nat.zero
+| Nat.succ k => Eq.refl.{1} Nat (Nat.succ k)
+```
+
+When supplied, `_compile_match` skips the non-dependent Bool/Nat fast
+paths and uses M directly as the recursor's motive.  The general-case
+path already applies the motive to each field when computing IH types,
+so dependent motives work without further changes.  The user is
+responsible for each arm's rhs having the right `motive (Const.applied)`
+type.
 
 ### `376402e` — intro is a standalone tactic; seq threads ctx
 
@@ -415,16 +433,18 @@ up" below.
 
 Pieces ordered by impact and tractability:
 
-1. **Recursion-on-multiple-args / dependent match** — Currently match
-   only handles non-dependent motives.  A small extension is to let the
-   user supply a motive explicitly with `match e (motive := ...) with`.
-
-2. **Mid-seq intro / per-subgoal intros** — `_run_seq` only handles
+1. **Mid-seq intro / per-subgoal intros** — `_run_seq` only handles
    LEADING intros.  `apply f; intro h; ...` (intro addressing a
    Pi-typed subgoal of `apply f`) doesn't yet work; intro outside the
    leading position currently errors.  The natural fix is contextful
    subgoals (each subgoal carries a snapshot of its ctx) so an intro
    inside the subgoal-drain phase can peel that subgoal's Pi.
+
+2. **Match on indexed inductives** — currently `match` errors on
+   inductives with `num_indices > 0` (e.g. Vec, Eq, Nat.le).  Even with
+   `(motive := M)` we don't yet support this.  The recursor's signature
+   includes the indices, which need to be inferred from the scrutinee's
+   type and passed in order.
 
 3. **`Nat.mul_comm`, `Nat.add_assoc`, `Nat.mul_one`** — Each follows the
    `add_comm` pattern; would build out a real `Nat` namespace.  ~1 page
