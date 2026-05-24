@@ -1,0 +1,110 @@
+"""Parse a textual Lean-ish source file, build the env, emit, verify."""
+from __future__ import annotations
+import sys, os, io
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from src.env import Env
+from src.prelude_decls import build_stdlib
+from src.emitter import emit_env
+from src.lean_parser import elaborate
+from src.mm0_verify import verify_file, verify_text
+
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+EXAMPLES = os.path.normpath(os.path.join(HERE, "..", "examples"))
+
+
+def _run_example(filename: str):
+    env = Env()
+    build_stdlib(env)
+    with open(os.path.join(EXAMPLES, filename)) as f:
+        src = f.read()
+    added = elaborate(src, env)
+    out = io.StringIO()
+    emit_env(env, out, only=added)
+    venv = verify_file(os.path.join(HERE, "..", "prelude", "cic.mm0"))
+    pre = io.StringIO()
+    emit_env(env, pre, only=[n for n in env.order if n not in added])
+    verify_text(pre.getvalue(), venv)
+    verify_text(out.getvalue(), venv)
+
+
+def test_parse_and_verify_demo():
+    _run_example("demo.lean")
+
+
+def test_parse_and_verify_vec():
+    _run_example("vec.lean")
+
+
+def test_parse_and_verify_algebra():
+    _run_example("algebra.lean")
+
+
+def test_parse_and_verify_order():
+    _run_example("order.lean")
+
+
+def test_parse_and_verify_match():
+    _run_example("match.lean")
+
+
+def test_parse_and_verify_match_list():
+    _run_example("match_list.lean")
+
+
+def test_parse_and_verify_implicits():
+    _run_example("implicits.lean")
+
+
+def test_parse_and_verify_no_levels():
+    _run_example("no_levels.lean")
+
+
+def test_parse_and_verify_typeclass():
+    _run_example("typeclass.lean")
+
+
+def test_parse_and_verify_arith():
+    _run_example("arith.lean")
+
+
+def test_parse_and_verify_hop():
+    _run_example("hop.lean")
+
+
+def test_parse_and_verify_algebra2():
+    _run_example("algebra2.lean")
+
+
+def test_parse_and_verify_at_syntax():
+    _run_example("at_syntax.lean")
+
+
+def test_parse_and_verify_parametric_inst():
+    _run_example("parametric_inst.lean")
+
+
+def test_parse_and_verify_recursion():
+    _run_example("recursion.lean")
+
+
+def test_parse_and_verify_list_rec():
+    _run_example("list_rec.lean")
+
+
+if __name__ == "__main__":
+    tests = [v for k, v in list(globals().items()) if k.startswith("test_")]
+    passed = failed = 0
+    for t in tests:
+        try:
+            t()
+            print(f"  ok  {t.__name__}")
+            passed += 1
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f"FAIL  {t.__name__}: {e}")
+            failed += 1
+    print(f"\n{passed} passed, {failed} failed")
+    sys.exit(0 if failed == 0 else 1)

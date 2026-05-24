@@ -1,0 +1,188 @@
+;; ============================================================
+;; Axiomatisation of the Calculus of Inductive Constructions
+;; (predicative fragment) inside Metamath Zero.
+;;
+;; The trusted base consists of:
+;;   (1) the MM0 verifier (src/mm0_verify.py)
+;;   (2) this file
+;; If both are correct, every theorem accepted is sound.
+;; ============================================================
+
+;; -------- Peano naturals (used for de Bruijn indices) --------
+(sort nat)
+(term nzero () nat)
+(term nsucc ((n nat)) nat)
+
+;; -------- Universe levels --------
+(sort lvl)
+(term lzero () lvl)
+(term lsucc ((l lvl)) lvl)
+(term lmax  ((a lvl) (b lvl)) lvl)
+(term limax ((a lvl) (b lvl)) lvl)
+
+;; Level equivalence axioms (rewriting `limax` into the right form
+;; is handled by the verifier's equality up to definitions).
+(def limax-zero ((a lvl)) lvl (lzero))                  ;; placeholder; see lvl-eq
+
+;; -------- CIC expressions --------
+(sort expr)
+
+(term esort  ((l lvl)) expr)
+(term evar   ((i nat)) expr)
+(term eapp   ((f expr) (a expr)) expr)
+(term elam   ((d expr) (b expr)) expr)
+(term epi    ((d expr) (b expr)) expr)
+(term elet   ((t expr) (v expr) (b expr)) expr)
+
+;; -------- Typing contexts --------
+(sort ctx)
+(term cnil  () ctx)
+(term ccons ((t expr) (g ctx)) ctx)
+
+;; -------- Propositions (judgments) --------
+(sort wff)
+(term has-type ((g ctx) (e expr) (t expr)) wff)
+(term def-eq   ((g ctx) (a expr) (b expr)) wff)
+(term lvl-eq   ((a lvl) (b lvl)) wff)
+
+;; -------- Built-in computational rules --------
+;; `shift` and `subst1` would be enormous to axiomatize; we treat them
+;; as primitive operations on the expr sort.  The verifier evaluates
+;; them when comparing terms.
+(builtin shift  ((e expr) (d nat) (c nat)) expr)
+(builtin shift1 ((e expr)) expr)
+(builtin subst1 ((b expr) (v expr)) expr)
+
+;; ============================================================
+;; Typing rules of CIC
+;; ============================================================
+
+;; Γ ⊢ Sort l : Sort (l+1)
+(axiom ht-sort
+  ((G ctx) (l lvl))
+  ()
+  (has-type G (esort l) (esort (lsucc l))))
+
+;; Γ, T ⊢ #0 : shift1 T
+(axiom ht-var0
+  ((G ctx) (T expr))
+  ()
+  (has-type (ccons T G) (evar nzero) (shift1 T)))
+
+;; Γ ⊢ #i : T   ⟹   Γ, S ⊢ #(i+1) : shift1 T
+(axiom ht-weak
+  ((G ctx) (S expr) (T expr) (i nat))
+  ((has-type G (evar i) T))
+  (has-type (ccons S G) (evar (nsucc i)) (shift1 T)))
+
+;; Γ ⊢ A : Sort u    Γ, A ⊢ B : Sort v
+;; ----------------------------------------
+;; Γ ⊢ Π A. B : Sort (imax u v)
+(axiom ht-pi
+  ((G ctx) (A expr) (B expr) (u lvl) (v lvl))
+  ((has-type G A (esort u))
+   (has-type (ccons A G) B (esort v)))
+  (has-type G (epi A B) (esort (limax u v))))
+
+;; Γ ⊢ A : Sort u    Γ, A ⊢ b : B
+;; ----------------------------------------
+;; Γ ⊢ λ A. b : Π A. B
+(axiom ht-lam
+  ((G ctx) (A expr) (b expr) (B expr) (u lvl))
+  ((has-type G A (esort u))
+   (has-type (ccons A G) b B))
+  (has-type G (elam A b) (epi A B)))
+
+;; Γ ⊢ f : Π A. B    Γ ⊢ a : A
+;; ----------------------------------------
+;; Γ ⊢ f a : B[a]
+(axiom ht-app
+  ((G ctx) (f expr) (a expr) (A expr) (B expr))
+  ((has-type G f (epi A B))
+   (has-type G a A))
+  (has-type G (eapp f a) (subst1 B a)))
+
+;; Conversion rule: types equal up to definitional equality are interchangeable.
+;; (We require T' to be a type to maintain syntactic regularity.)
+(axiom ht-conv
+  ((G ctx) (t expr) (T expr) (T2 expr) (u lvl))
+  ((has-type G t T)
+   (def-eq G T T2)
+   (has-type G T2 (esort u)))
+  (has-type G t T2))
+
+;; A closed term that's well-typed under cnil is well-typed under any Γ.
+;; This is admissible (provable by induction on the derivation), but we take
+;; it as an axiom for emitter convenience.  Soundness: if e and T have no
+;; free BVars, weakening from cnil to any Γ does not change the term.
+(axiom ht-weak-closed
+  ((G ctx) (e expr) (T expr))
+  ((has-type cnil e T))
+  (has-type G e T))
+
+;; Let-binding: Γ ⊢ T : Sort u    Γ ⊢ v : T    Γ, T ⊢ b : B
+;; ⟹ Γ ⊢ let T := v in b : B[v]
+(axiom ht-let
+  ((G ctx) (T expr) (v expr) (b expr) (B expr) (u lvl))
+  ((has-type G T (esort u))
+   (has-type G v T)
+   (has-type (ccons T G) b B))
+  (has-type G (elet T v b) (subst1 B v)))
+
+;; ============================================================
+;; Definitional equality
+;; ============================================================
+
+(axiom de-refl
+  ((G ctx) (e expr))
+  ()
+  (def-eq G e e))
+
+(axiom de-sym
+  ((G ctx) (a expr) (b expr))
+  ((def-eq G a b))
+  (def-eq G b a))
+
+(axiom de-trans
+  ((G ctx) (a expr) (b expr) (c expr))
+  ((def-eq G a b) (def-eq G b c))
+  (def-eq G a c))
+
+;; β: (λ A. b) a  ≡  b[a]
+(axiom de-beta
+  ((G ctx) (A expr) (b expr) (a expr))
+  ()
+  (def-eq G (eapp (elam A b) a) (subst1 b a)))
+
+;; ζ: let T := v in b  ≡  b[v]
+(axiom de-zeta
+  ((G ctx) (T expr) (v expr) (b expr))
+  ()
+  (def-eq G (elet T v b) (subst1 b v)))
+
+;; congruences
+(axiom de-cong-app
+  ((G ctx) (f expr) (f2 expr) (a expr) (a2 expr))
+  ((def-eq G f f2) (def-eq G a a2))
+  (def-eq G (eapp f a) (eapp f2 a2)))
+
+(axiom de-cong-lam
+  ((G ctx) (A expr) (A2 expr) (b expr) (b2 expr))
+  ((def-eq G A A2)
+   (def-eq (ccons A G) b b2))
+  (def-eq G (elam A b) (elam A2 b2)))
+
+;; Proof irrelevance: any two proofs of the same Prop are def-equal.
+;; This is a kernel primitive in Lean 4.
+(axiom de-prop-irrel
+  ((G ctx) (P expr) (a expr) (b expr))
+  ((has-type G P (esort lzero))
+   (has-type G a P)
+   (has-type G b P))
+  (def-eq G a b))
+
+(axiom de-cong-pi
+  ((G ctx) (A expr) (A2 expr) (B expr) (B2 expr))
+  ((def-eq G A A2)
+   (def-eq (ccons A G) B B2))
+  (def-eq G (epi A B) (epi A2 B2)))
