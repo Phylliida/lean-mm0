@@ -11,10 +11,10 @@ trust boundary.
 
 | | |
 |---|---|
-| Tests | **103 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 36 parser examples) |
-| Total source | ~6.5 kLoC Python + 188 LoC MM0 prelude + 1315 LoC `.lean` examples |
+| Tests | **104 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 37 parser examples) |
+| Total source | ~6.5 kLoC Python + 188 LoC MM0 prelude + 1332 LoC `.lean` examples |
 | Trusted base | `src/mm0_verify.py` (669 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 37 commits on `master`; clean working tree |
+| Repo | 39 commits on `master`; clean working tree |
 
 ## What the pipeline does
 
@@ -219,6 +219,8 @@ b05c35c  HANDOFF for bool_ops
 bf41a8e  Fix emitter name-mangling collision (escape '.' as '_d_')
 f5e54a4  HANDOFF for emitter fix
 282e66d  cases tactic (v1: non-recursive non-indexed)
+2a9d98a  HANDOFF for cases v1
+745cc0f  Nat.lt definition + Nat.lt_le composition
 ```
 
 ### `383b984` — initial commit
