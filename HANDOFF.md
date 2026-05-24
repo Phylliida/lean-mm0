@@ -11,10 +11,10 @@ trust boundary.
 
 | | |
 |---|---|
-| Tests | **90 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 23 parser examples) |
-| Total source | ~6.2 kLoC Python + 188 LoC MM0 prelude + 768 LoC `.lean` examples |
+| Tests | **91 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 24 parser examples) |
+| Total source | ~6.2 kLoC Python + 188 LoC MM0 prelude + 800 LoC `.lean` examples |
 | Trusted base | `src/mm0_verify.py` (669 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 9 commits on `master`; clean working tree |
+| Repo | 11 commits on `master`; clean working tree |
 
 ## What the pipeline does
 
@@ -151,10 +151,10 @@ What the parser accepts and the elaborator handles:
 |---|---|
 | `exact e` | elaborate `e` against the goal |
 | `rfl` | if goal is `Eq α a b` with `a ≡ b`, produce `Eq.refl α a` |
-| `intro x` | if goal is `Π x : T, U`, push `x` to ctx and run the rest of the block with the body as the new goal |
+| `intro x` | standalone tactic; seq peels a Π off the goal and pushes `x` as an FVar.  Trailing tactics see `x` |
 | `apply f` | elaborate `f`, peel its Π binders as fresh metas, unify the return type with the goal; explicit metas the unifier didn't pin become subgoals |
 | `assumption` | succeed if some local hypothesis (innermost-first) is def-equal to the goal |
-| `t1; t2; ...` | sequence — `apply` deposits subgoals into a queue, subsequent tactics drain them in order |
+| `t1; t2; ...` | seq — consumes leading `intro`s, then runs the first body tactic, then drains its subgoals with the rest.  Lams get wrapped at the end |
 
 ## Trust boundary detail
 
@@ -177,7 +177,7 @@ accept something false — only reject something true.
 
 ## What's been built (chronological)
 
-9 commits, each adding a coherent slice:
+11 commits, each adding a coherent slice:
 
 ```
 383b984  Initial commit: lean-mm0 prototype
@@ -189,6 +189,8 @@ be3e47f  Tiny tactic monad: by rfl/exact/intro
 e579ba5  apply + assumption tactics; subgoal-aware seq
 2d91565  HANDOFF.md commit-hash patch-up
 39389e2  Decidable + ite + if/then/else sugar; `_` holes
+0071567  HANDOFF for Decidable
+376402e  Real fix: intro is standalone; seq threads context through
 ```
 
 ### `383b984` — initial commit
@@ -274,6 +276,30 @@ The skeleton with everything that works:
   inst slot would dangle)
 - New example `decidable.lean` (7 examples; includes nested ite, a
   `def choose` taking an explicit `Decidable c`, both branches verified)
+
+### `376402e` — intro is a standalone tactic; seq threads ctx
+
+The old design had intro nest the rest of the tactic block as its body,
+so `intro h; apply f; rfl; rfl` parsed as `intro("h", seq([apply, rfl,
+rfl]))`.  This worked for the common case but meant subgoals from
+`apply` had no consumer outside the nested body.  Other architectural
+problems flowed from this: errors when intro is followed by more
+tactics than its body could absorb, and no clean way to mix intros
+with subgoal-draining.
+
+The fix:
+
+- Parser: `intro x` returns `("intro", x)` — no sub_tac.  `intro x;
+  rest` parses as `seq([intro x, ...rest])`.  `_parse_tactics` threads
+  `bvar_stack` so x is visible to later tactics for BVar resolution
+- Elaborator: a new `_run_seq` consumes leading intros (peeling Π
+  binders off the goal, pushing FVars onto ctx), then runs the first
+  non-intro tactic as the "main" and uses the rest to drain its
+  subgoals — all in the extended ctx.  Lams get wrapped innermost-first
+  at the end
+- Standalone intro outside a seq errors with a clear message
+- New example `intro_seq.lean` (5 examples; multi-intro, intro+apply
+  with rfl-drain, intro+apply with assumption-drain)
 
 ## Headline examples
 
@@ -389,16 +415,16 @@ up" below.
 
 Pieces ordered by impact and tractability:
 
-1. **`apply` subgoals escaping `intro`** — Currently the tactic monad
-   refuses to let an unsolved subgoal cross an `intro` boundary (the
-   `fv` would dangle).  The fix is to abstract the subgoal's type into
-   a Π over the introduced binder and reassign the meta with a Lam.
-   Unlocks `intro h; apply f h` style proofs where `f` produces a goal
-   referencing `h`.
-
-2. **Recursion-on-multiple-args / dependent match** — Currently match
+1. **Recursion-on-multiple-args / dependent match** — Currently match
    only handles non-dependent motives.  A small extension is to let the
    user supply a motive explicitly with `match e (motive := ...) with`.
+
+2. **Mid-seq intro / per-subgoal intros** — `_run_seq` only handles
+   LEADING intros.  `apply f; intro h; ...` (intro addressing a
+   Pi-typed subgoal of `apply f`) doesn't yet work; intro outside the
+   leading position currently errors.  The natural fix is contextful
+   subgoals (each subgoal carries a snapshot of its ctx) so an intro
+   inside the subgoal-drain phase can peel that subgoal's Pi.
 
 3. **`Nat.mul_comm`, `Nat.add_assoc`, `Nat.mul_one`** — Each follows the
    `add_comm` pattern; would build out a real `Nat` namespace.  ~1 page
