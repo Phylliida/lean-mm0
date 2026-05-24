@@ -109,6 +109,10 @@ def test_parse_and_verify_math():
     _run_example("math.lean")
 
 
+def test_parse_and_verify_tactics():
+    _run_example("tactics.lean")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in list(globals().items()) if k.startswith("test_")]
     passed = failed = 0

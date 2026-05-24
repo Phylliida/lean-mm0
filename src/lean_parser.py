@@ -33,8 +33,29 @@ from .levels import (
     Level, LZero, LSucc, LParam, level_succ,
 )
 from .expr import (
-    Expr, Sort, BVar, FVar, Const, App, Lam, Pi, Let, Meta,
+    Expr, Sort, BVar, FVar, Const, App, Lam, Pi, Let, Meta, By,
 )
+
+
+# ---------------- tactic registry ----------------
+# Tactic AST nodes are stored as Python tuples in a global registry; the
+# `By(tac_id)` AST node carries an index into it.  Tactic forms:
+#   ("exact", expr)
+#   ("rfl",)
+#   ("intro", str, sub_tac)     -- intro x; <sub_tac>
+#   ("seq", [tac1, tac2, ...])
+
+_TACTIC_REGISTRY: List[tuple] = []
+
+
+def _register_tactic(tac: tuple) -> int:
+    i = len(_TACTIC_REGISTRY)
+    _TACTIC_REGISTRY.append(tac)
+    return i
+
+
+def get_tactic(tac_id: int) -> tuple:
+    return _TACTIC_REGISTRY[tac_id]
 from .env import Env, Definition, Axiom
 from .kernel import Kernel, LocalCtx
 
@@ -53,6 +74,7 @@ KEYWORDS = {"def", "axiom", "theorem", "example", "instance",
             "infix", "infixl", "infixr",
             "fun", "lam", "let", "in",
             "Sort", "Type", "Prop", "forall", "match", "with", "where",
+            "by", "exact", "rfl", "intro",
             "->", "=>", ":=", ":", ",", ";",
             "(", ")", ".{", "}", "|", "[", "]"}
 
@@ -106,7 +128,8 @@ def lex(src: str) -> List[Tok]:
                                     "extends", "infix", "infixl", "infixr",
                                     "fun", "lam", "let", "in",
                                     "Sort", "Type", "Prop",
-                                    "forall", "match", "with", "where"} else "id"
+                                    "forall", "match", "with", "where",
+                                    "by", "exact", "rfl", "intro"} else "id"
             out.append(Tok(kind, text, i)); i = j; continue
         raise SyntaxError(f"unexpected character {c!r} at {i}")
     return out
@@ -596,6 +619,11 @@ class P:
             from .expr import Explicit as _Explicit
             inner = self.parse_atom(lvl_params, bvar_stack)
             return _Explicit(inner)
+        if t.text == "by":
+            self.take()
+            tac = self._parse_tactics(lvl_params, bvar_stack)
+            tac_id = _register_tactic(tac)
+            return By(tac_id)
         if t.text == "match":
             self.take()
             scrutinee = self.parse_app(lvl_params, bvar_stack)
@@ -696,6 +724,46 @@ class P:
                 e = App(Const("Nat.succ", ()), e)
             return e
         raise SyntaxError(f"unexpected token {t.text!r}")
+
+    # ---- tactics ----
+
+    def _parse_tactics(self, lvl_params, bvar_stack) -> tuple:
+        """Parse a tactic block: tac1; tac2; ...  (sequence)."""
+        first = self._parse_single_tactic(lvl_params, bvar_stack)
+        if not self.at(";"):
+            return first
+        tacs = [first]
+        while self.at(";"):
+            self.take()
+            tacs.append(self._parse_single_tactic(lvl_params, bvar_stack))
+        return ("seq", tacs)
+
+    def _parse_single_tactic(self, lvl_params, bvar_stack) -> tuple:
+        t = self.peek()
+        if t is None:
+            raise SyntaxError("expected tactic")
+        if t.text == "rfl":
+            self.take()
+            return ("rfl",)
+        if t.text == "exact":
+            self.take()
+            e = self.parse_expr(lvl_params, bvar_stack)
+            return ("exact", e, list(bvar_stack))
+        if t.text == "intro":
+            self.take()
+            name_tok = self.take()
+            if name_tok.kind != "id":
+                raise SyntaxError("intro expects a name")
+            # The remainder of the tactic block runs with `name` in scope.
+            # If the next token starts another tactic-or-seq, swallow it as
+            # the body of this intro.
+            if self.at(";"):
+                self.take()
+                sub = self._parse_tactics(lvl_params, bvar_stack + [name_tok.text])
+            else:
+                sub = ("rfl",)  # no-op default
+            return ("intro", name_tok.text, sub)
+        raise SyntaxError(f"unknown tactic {t.text!r}")
 
     def parse_level(self, lvl_params: Tuple[str, ...]) -> Level:
         t = self.peek()

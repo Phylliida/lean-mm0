@@ -84,7 +84,15 @@ class Explicit:
     inner: "Expr"
 
 
-Expr = Union[Sort, BVar, FVar, Const, App, Lam, Pi, Let, Meta, Explicit]
+@dataclass(frozen=True)
+class By:
+    """`by TAC` marker — the elaborator runs the tactic interpreter
+    against the expected type to produce a term.  The tactic AST is
+    stored as an opaque Python tuple (the elaborator interprets)."""
+    tac_id: int
+
+
+Expr = Union[Sort, BVar, FVar, Const, App, Lam, Pi, Let, Meta, Explicit, By]
 
 
 # ---------------- shifting / substitution ----------------
@@ -93,7 +101,7 @@ def shift(e: Expr, d: int, cutoff: int = 0) -> Expr:
     """Add `d` to every BVar index ≥ cutoff."""
     if isinstance(e, BVar):
         return BVar(e.idx + d) if e.idx >= cutoff else e
-    if isinstance(e, (Sort, FVar, Const, Meta)):
+    if isinstance(e, (Sort, FVar, Const, Meta, By)):
         return e
     if isinstance(e, Explicit):
         return Explicit(shift(e.inner, d, cutoff))
@@ -119,7 +127,7 @@ def subst_bvar(e: Expr, j: int, v: Expr) -> Expr:
         if e.idx > j:
             return BVar(e.idx - 1)        # bound variable was removed
         return e
-    if isinstance(e, (Sort, FVar, Const, Meta)):
+    if isinstance(e, (Sort, FVar, Const, Meta, By)):
         return e
     if isinstance(e, Explicit):
         return Explicit(subst_bvar(e.inner, j, v))
@@ -157,7 +165,7 @@ def close(e: Expr, name: str, cutoff: int = 0) -> Expr:
         # Make room for the new binder by shifting outer BVars up.
         # (close is the inverse of open_, which decrements outer BVars.)
         return BVar(e.idx + 1) if e.idx >= cutoff else e
-    if isinstance(e, (Sort, Const, Meta)):
+    if isinstance(e, (Sort, Const, Meta, By)):
         return e
     if isinstance(e, Explicit):
         return Explicit(close(e.inner, name, cutoff))
@@ -185,7 +193,7 @@ def inst_levels(e: Expr, params: Tuple[str, ...], args: Tuple[Level, ...]) -> Ex
         return Sort(lsubst(e.level, env))
     if isinstance(e, Const):
         return Const(e.name, tuple(lsubst(l, env) for l in e.levels))
-    if isinstance(e, (BVar, FVar, Meta)):
+    if isinstance(e, (BVar, FVar, Meta, By)):
         return e
     if isinstance(e, Explicit):
         return Explicit(inst_levels(e.inner, params, args))
@@ -234,6 +242,8 @@ def show(e: Expr, depth: int = 0) -> str:
         return f"?m{e.id}"
     if isinstance(e, Explicit):
         return f"@{show(e.inner, depth)}"
+    if isinstance(e, By):
+        return f"by#{e.tac_id}"
     if isinstance(e, Let):
         return f"(let {e.binder}:{show(e.type_, depth)} := {show(e.value, depth)} in {show(e.body, depth+1)})"
     raise TypeError(e)

@@ -30,7 +30,7 @@ from .levels import (
     subst as level_subst,
 )
 from .expr import (
-    Expr, Sort, BVar, FVar, Const, App, Lam, Pi, Let, Meta, Explicit,
+    Expr, Sort, BVar, FVar, Const, App, Lam, Pi, Let, Meta, Explicit, By,
     shift, subst_bvar, open_, close, inst_levels, show as show_expr,
 )
 from .env import Env, Definition, Axiom, Constructor, Recursor, Inductive
@@ -429,6 +429,17 @@ class Elaborator:
         # Decompose into head + args so we can handle implicit insertion
         # at application sites uniformly.
         head, args = _spine(e)
+        if isinstance(head, By):
+            if args:
+                raise ElabError("`by` cannot be applied as a function")
+            if expected is None:
+                raise ElabError("`by` needs an expected type")
+            return self._run_tactic_by(head, expected, ctx), expected
+        # Bare Lam at the head with no args and a known expected type:
+        # propagate the expected's body into the Lam's body so `by` and
+        # other expectation-sensitive forms can see it.
+        if isinstance(head, Lam) and not args and expected is not None:
+            return self._elab_lam_with_expected(head, expected, ctx)
         skip_implicits = False
         if isinstance(head, Explicit):
             skip_implicits = True
@@ -609,6 +620,102 @@ class Elaborator:
             return ty
         raise TypeError(e)
 
+
+    def _elab_lam_with_expected(self, lam: Lam, expected: Expr,
+                                  ctx: LocalCtx) -> Tuple[Expr, Expr]:
+        """Elaborate a Lam against an expected Pi type, propagating the
+        expected body to inner elaboration (so `by` etc. see it)."""
+        exp_w = self.kernel.whnf(self.mctx.instantiate(expected), ctx)
+        if not isinstance(exp_w, Pi):
+            # fall back: just elab the Lam as an atom
+            head_e = self._elab_atom(lam, ctx)
+            head_ty = self._infer_elaborated(head_e, ctx)
+            return head_e, head_ty
+        dom_resolved = _resolve_bvars(lam.dom, ctx)
+        fv = ctx.push(lam.binder, dom_resolved)
+        try:
+            body_open = open_(lam.body, FVar(fv, dom_resolved))
+            body_expected = open_(exp_w.body, FVar(fv, dom_resolved))
+            body_e, body_ty = self.elab(body_open, body_expected, ctx)
+            body_e = self.mctx.instantiate(body_e)
+            body_ty = self.mctx.instantiate(body_ty)
+            elab_lam = Lam(lam.binder, dom_resolved, close(body_e, fv))
+            elab_ty = Pi(lam.binder, dom_resolved, close(body_ty, fv), False)
+            return elab_lam, elab_ty
+        finally:
+            ctx.pop()
+
+    # -- tactic interpreter --
+
+    def _run_tactic_by(self, by_node: By, goal: Expr, ctx: LocalCtx) -> Expr:
+        """Top-level entry point for `by TAC`.  Runs the tactic against
+        `goal` in the elaborator's current context, returns the term."""
+        from .lean_parser import get_tactic
+        tac = get_tactic(by_node.tac_id)
+        return self._run_tactic(tac, goal, ctx)
+
+    def _run_tactic(self, tac: tuple, goal: Expr, ctx: LocalCtx) -> Expr:
+        kind = tac[0]
+        if kind == "rfl":
+            # Goal must be `Eq.{u} α a b` with a ≡ b (defeq).
+            goal_w = self.kernel.whnf(self.mctx.instantiate(goal), ctx)
+            head, args = _spine(goal_w)
+            if not (isinstance(head, Const) and head.name == "Eq"
+                    and len(args) == 3):
+                raise ElabError(
+                    f"rfl: goal is not `Eq _ _ _`, got {show_expr(goal_w)}")
+            α, a, b = args
+            if not self.kernel.def_eq(a, b, ctx):
+                raise ElabError(
+                    f"rfl: sides differ:\n"
+                    f"  lhs = {show_expr(self.mctx.instantiate(a))}\n"
+                    f"  rhs = {show_expr(self.mctx.instantiate(b))}")
+            lvls = head.levels
+            return App(App(Const("Eq.refl", lvls), α), a)
+
+        if kind == "exact":
+            _, expr, _bvar_stack = tac
+            # The stored expr has BVars from the tactic-parse scope.
+            # Resolve them against the elaborator's current ctx (which
+            # has FVars for each prior `intro`).
+            expr_r = _resolve_bvars(expr, ctx)
+            e_elab, _ = self.elab(expr_r, goal, ctx)
+            return e_elab
+
+        if kind == "intro":
+            _, name, sub_tac = tac
+            # Goal must be a Pi.
+            goal_w = self.kernel.whnf(self.mctx.instantiate(goal), ctx)
+            if not isinstance(goal_w, Pi):
+                raise ElabError(
+                    f"intro: goal is not a Pi, got {show_expr(goal_w)}")
+            dom = goal_w.dom
+            fv = ctx.push(name, dom)
+            try:
+                body_goal = open_(goal_w.body, FVar(fv, dom))
+                body_e = self._run_tactic(sub_tac, body_goal, ctx)
+                body_e = self.mctx.instantiate(body_e)
+                return Lam(name, dom, close(body_e, fv))
+            finally:
+                ctx.pop()
+
+        if kind == "seq":
+            _, tacs = tac
+            # For seq, run tactics in order, threading what's left to prove.
+            # For our minimal model, only the LAST tactic produces the
+            # final term; earlier tactics that aren't `intro` (which
+            # nests its body via parsing) wouldn't change the goal here.
+            # So we just run them and use the result of the last.
+            if not tacs:
+                raise ElabError("empty tactic sequence")
+            *prelude, last = tacs
+            # Each non-`intro` tactic in `prelude` is essentially a no-op
+            # for our minimal model; we still type-check them.
+            for t in prelude:
+                _ = self._run_tactic(t, goal, ctx)
+            return self._run_tactic(last, goal, ctx)
+
+        raise ElabError(f"unknown tactic kind: {kind}")
 
     # -- instance synthesis --
 
