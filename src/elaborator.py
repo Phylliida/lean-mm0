@@ -146,6 +146,19 @@ class MetaContext:
         return out
 
 
+def _subgoal_meta_id(sub) -> int:
+    """A subgoal is either a bare meta_id (legacy) or (meta_id, ctx_snap)."""
+    return sub[0] if isinstance(sub, tuple) else sub
+
+
+def _subgoal_unpack(sub, ctx):
+    """Unpack (meta_id, ctx_snap).  For a legacy bare meta_id, fall back
+    to the current ctx as the snapshot."""
+    if isinstance(sub, tuple):
+        return sub[0], sub[1]
+    return sub, tuple(ctx.entries)
+
+
 def _collect_metas(e: Expr) -> set:
     if isinstance(e, Meta):
         return {e.id}
@@ -669,11 +682,12 @@ class Elaborator:
 
     # -- tactic interpreter --
     #
-    # Each tactic returns `(term, subgoal_meta_ids)`.  Tactics that solve
-    # the goal completely return an empty subgoal list.  `apply` may
-    # return non-empty subgoals — meta IDs that subsequent tactics in the
-    # `;`-sequence must fill in order.  `seq` drains the subgoal queue
-    # using the rest of the tactics.
+    # Each tactic returns `(term, subgoals)`.  A subgoal is either a bare
+    # meta_id (legacy) or a tuple `(meta_id, ctx_snap)` — the ctx_snap is
+    # a snapshot of `ctx.entries` from where the subgoal was created.
+    # `seq` uses these snapshots to run later tactics in the right ctx
+    # (so e.g. `apply f` made inside `intro h` produces subgoals whose
+    # solving tactics still see `h`).
 
     def _run_tactic_by(self, by_node: By, goal: Expr, ctx: LocalCtx) -> Expr:
         """Top-level entry point for `by TAC`.  Runs the tactic against
@@ -684,11 +698,13 @@ class Elaborator:
         # Any leftover subgoals at the top level are an error — they
         # should have been drained by `seq`.  (A leftover that's been
         # auto-pinned by unification is fine.)
-        unresolved = [m for m in subs if self.mctx.get(m) is None]
+        unresolved = [s for s in subs
+                      if self.mctx.get(_subgoal_meta_id(s)) is None]
         if unresolved:
             tys = "; ".join(
-                show_expr(self.mctx.instantiate(self.mctx.get_type(m)))
-                for m in unresolved)
+                show_expr(self.mctx.instantiate(
+                    self.mctx.get_type(_subgoal_meta_id(s))))
+                for s in unresolved)
             raise ElabError(f"unsolved subgoals after tactic block: {tys}")
         return self.mctx.instantiate(term)
 
@@ -735,6 +751,10 @@ class Elaborator:
         if kind == "apply":
             _, expr, _bvar_stack = tac
             expr_r = _resolve_bvars(expr, ctx)
+            # Snapshot ctx so the subgoals can later be solved by tactics
+            # that may run in a different ctx (e.g. after the seq has
+            # popped some intros).
+            ctx_snap = tuple(ctx.entries)
             # Elaborate without an expected type — we want the full
             # function type so we can peel it ourselves.
             e_elab, e_ty = self.elab(expr_r, None, ctx)
@@ -778,7 +798,8 @@ class Elaborator:
                         f"{show_expr(self.mctx.instantiate(dom))}")
                 self.mctx.assign(m.id, sub)
             # Only return explicit metas that unification didn't auto-solve.
-            remaining = [m for m in explicit_metas if self.mctx.get(m) is None]
+            remaining = [(m, ctx_snap) for m in explicit_metas
+                         if self.mctx.get(m) is None]
             return e_elab, remaining
 
         if kind == "intro":
@@ -794,82 +815,117 @@ class Elaborator:
         raise ElabError(f"unknown tactic kind: {kind}")
 
     def _run_seq(self, tacs: list, goal: Expr,
-                 ctx: LocalCtx) -> Tuple[Expr, List[int]]:
-        """Run a tactic sequence.
+                 ctx: LocalCtx) -> Tuple[Expr, list]:
+        """Run a tactic sequence with focused-goal semantics.
 
-        Leading `intro`s peel Π binders off the goal, pushing fresh FVars
-        onto `ctx`.  The first non-intro tactic produces the main term;
-        any subgoals it leaves are drained by the trailing tactics in
-        order.  After everything resolves, we wrap a Lam for each
-        introduced binder (innermost first), closing over its FVar.
+        State:
+        - One focused goal (the "main" goal initially; each subgoal in
+          turn afterward).
+        - A stack of focused intros: each adds an FVar to `ctx` and
+          shrinks the focused goal by one Π.
+        - A queue of pending subgoals (each carries a ctx snapshot from
+          its creation site).
 
-        Subsequent tactics that solve subgoals see the EXTENDED ctx — so
-        e.g. `intro h; apply f h; rfl` works even when the rfl is the
-        last tactic and `apply` produced a subgoal that doesn't reference
-        `h`.  This is the structural alternative to abstracting escaped
-        subgoals over the introduced binder."""
+        Each tactic acts on the focused goal.  `intro` peels a Π off it.
+        Any other tactic produces a term that solves the focused goal:
+        if focused goal is the MAIN goal we defer wrapping its intros to
+        the very end (so meta assignments from later subgoals can refer
+        to those intros by FVar and be closed in a single final walk);
+        for subgoals we wrap focused intros into Lams immediately.
+        Subgoals produced by a tactic are prepended (depth-first)."""
         if not tacs:
             raise ElabError("empty tactic sequence")
-        # Phase 1: consume leading intros.
-        intro_stack: List[Tuple[str, Expr, str]] = []     # (name, dom, fv)
-        cur_goal = goal
-        i = 0
+        initial_entries = list(ctx.entries)
+        focused_is_main = True
+        focused_meta_id: Optional[int] = None
+        focused_goal = goal
+        focused_intros: List[Tuple[str, Expr, str]] = []
+        # Main goal's intros are pushed onto ctx but NOT popped until the
+        # very end — that way subgoal-solving terms can reference them as
+        # FVars and the final close() unifies everything.
+        main_intros: List[Tuple[str, Expr, str]] = []
+        main_term: Optional[Expr] = None
+        pending: List[Tuple[int, Expr, tuple]] = []
         try:
-            while i < len(tacs) and tacs[i][0] == "intro":
-                name = tacs[i][1]
-                goal_w = self.kernel.whnf(
-                    self.mctx.instantiate(cur_goal), ctx)
-                if not isinstance(goal_w, Pi):
+            for tac in tacs:
+                if focused_goal is None:
                     raise ElabError(
-                        f"intro {name!r}: goal is not a Π, got "
-                        f"{show_expr(goal_w)}")
-                dom = goal_w.dom
-                fv = ctx.push(name, dom)
-                intro_stack.append((name, dom, fv))
-                cur_goal = open_(goal_w.body, FVar(fv, dom))
-                i += 1
-            if i == len(tacs):
-                raise ElabError(
-                    "tactic sequence ends with intro — needs a body tactic")
-            # Phase 2: main tactic + drain its subgoals with trailing tacs.
-            main_tac = tacs[i]
-            rest = tacs[i + 1:]
-            main_term, sub_metas = self._run_tactic(main_tac, cur_goal, ctx)
-            queue = list(sub_metas)
-            rest_iter = iter(rest)
-            while True:
-                while queue and self.mctx.get(queue[0]) is not None:
-                    queue.pop(0)
-                if not queue:
-                    break
-                meta_id = queue.pop(0)
-                try:
-                    sub_tac = next(rest_iter)
-                except StopIteration:
+                        f"extra tactic with no remaining goals: {tac[0]!r}")
+                if tac[0] == "intro":
+                    name = tac[1]
+                    goal_w = self.kernel.whnf(
+                        self.mctx.instantiate(focused_goal), ctx)
+                    if not isinstance(goal_w, Pi):
+                        raise ElabError(
+                            f"intro {name!r}: focused goal is not a Π, got "
+                            f"{show_expr(goal_w)}")
+                    dom = goal_w.dom
+                    fv = ctx.push(name, dom)
+                    focused_intros.append((name, dom, fv))
+                    focused_goal = open_(goal_w.body, FVar(fv, dom))
+                    continue
+                # Non-intro tactic: produce a term for the focused goal.
+                term, sub_metas = self._run_tactic(tac, focused_goal, ctx)
+                term = self.mctx.instantiate(term)
+                if focused_is_main:
+                    # Defer wrapping the main intros — leave them pushed
+                    # so later subgoal solutions can use them as FVars.
+                    main_intros = focused_intros[:]
+                    main_term = term
+                    focused_intros = []
+                else:
+                    # Wrap subgoal-local intros into Lams now.
+                    for name, dom, fv in reversed(focused_intros):
+                        term = Lam(name, dom,
+                                   close(self.mctx.instantiate(term), fv))
+                        ctx.pop()
+                    focused_intros = []
+                    self.mctx.assign(focused_meta_id,
+                                     self.mctx.instantiate(term))
+                # Prepend new subgoals (depth-first).
+                new_pending: List[Tuple[int, Expr, tuple]] = []
+                for sub in sub_metas:
+                    meta_id, sub_ctx_snap = _subgoal_unpack(sub, ctx)
+                    if self.mctx.get(meta_id) is not None:
+                        continue
                     meta_ty = self.mctx.instantiate(
                         self.mctx.get_type(meta_id))
+                    new_pending.append((meta_id, meta_ty, sub_ctx_snap))
+                pending = new_pending + pending
+                while pending:
+                    m_id, _ty, _snap = pending[0]
+                    if self.mctx.get(m_id) is None:
+                        break
+                    pending.pop(0)
+                if pending:
+                    m_id, m_ty, m_snap = pending.pop(0)
+                    focused_is_main = False
+                    focused_meta_id = m_id
+                    focused_goal = self.mctx.instantiate(m_ty)
+                    ctx.entries[:] = list(m_snap)
+                else:
+                    focused_goal = None
+            if focused_goal is not None:
+                if focused_intros:
                     raise ElabError(
-                        f"unsolved subgoal: ?m{meta_id} : "
-                        f"{show_expr(meta_ty)}")
-                meta_ty = self.mctx.instantiate(self.mctx.get_type(meta_id))
-                sub_term, sub_metas_new = self._run_tactic(
-                    sub_tac, meta_ty, ctx)
-                sub_term = self.mctx.instantiate(sub_term)
-                self.mctx.assign(meta_id, sub_term)
-                queue.extend(sub_metas_new)
-            extra = list(rest_iter)
-            if extra:
+                        "tactic sequence ends with intro — needs a body")
                 raise ElabError(
-                    f"extra tactics after all goals solved "
-                    f"({len(extra)} unused)")
-            main_term = self.mctx.instantiate(main_term)
-            # Phase 3: wrap Lams (innermost-first).
-            for name, dom, fv in reversed(intro_stack):
-                main_term = Lam(name, dom, close(main_term, fv))
-            return main_term, []
+                    f"unsolved focused goal at end of seq: "
+                    f"{show_expr(self.mctx.instantiate(focused_goal))}")
+            if pending:
+                m_id, m_ty, _ = pending[0]
+                raise ElabError(
+                    f"unsolved subgoal at end of seq: "
+                    f"{show_expr(self.mctx.instantiate(m_ty))}")
+            if main_term is None:
+                raise ElabError("seq has only intros, no body tactic")
+            # Final wrap: instantiate fully, then close main's intros.
+            result = self.mctx.instantiate(main_term)
+            for name, dom, fv in reversed(main_intros):
+                result = Lam(name, dom, close(result, fv))
+            return result, []
         finally:
-            for _ in intro_stack:
-                ctx.pop()
+            ctx.entries[:] = initial_entries
 
     # -- instance synthesis --
 
