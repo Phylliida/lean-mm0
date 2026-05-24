@@ -11,10 +11,10 @@ trust boundary.
 
 | | |
 |---|---|
-| Tests | **97 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 30 parser examples) |
-| Total source | ~6.4 kLoC Python + 188 LoC MM0 prelude + 1112 LoC `.lean` examples |
+| Tests | **99 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 32 parser examples) |
+| Total source | ~6.4 kLoC Python + 188 LoC MM0 prelude + 1189 LoC `.lean` examples |
 | Trusted base | `src/mm0_verify.py` (669 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 22 commits on `master`; clean working tree |
+| Repo | 27 commits on `master`; clean working tree |
 
 ## What the pipeline does
 
@@ -205,6 +205,9 @@ cbb4c96  Mid-seq intros via contextful subgoals
 45eb5a2  HANDOFF for rewrite
 85f9ff3  nat_lemmas extended with rewrite-based proofs
 f38d618  Decidable composition: And/Or/Not instances
+2492f59  HANDOFF for Decidable compose
+9c2310c  Nat building blocks: nat_no_confuse, succ_ne_zero, succ_inj
+9071956  Nat.decEq via Nat.rec with Π-typed motive
 ```
 
 ### `383b984` — initial commit
@@ -290,6 +293,21 @@ The skeleton with everything that works:
   inst slot would dangle)
 - New example `decidable.lean` (7 examples; includes nested ite, a
   `def choose` taking an explicit `Decidable c`, both branches verified)
+
+### `9071956` — Nat.decEq
+
+`Nat.decEq n m : Decidable (Eq Nat n m)`.  Written via `Nat.rec`
+directly (not the match sugar) with motive
+`fun n => Π m, Decidable (Eq n m)` — this lets the IH be a function
+applicable to any new `m`, working around the structural-recursion
+sugar's restriction that non-recursive args can't change between the
+def and the recursive call.
+
+Three ite-based sanity examples confirm the function reduces at the
+kernel for both true and false cases.
+
+Depends on `nat_inj.lean`'s `succ_inj` and `succ_ne_zero`
+(commit `9c2310c`), themselves built via `Eq.rec` transports.
 
 ### `f38d618` — compositional Decidable instances
 
@@ -547,9 +565,9 @@ Pieces ordered by impact and tractability:
    `intro`), `cases` (eliminate an inductive hypothesis).
 
 3. **More Decidable instances** — `And` / `Or` / `Not` are done
-   (`decidable_compose.lean`).  Next: `Decidable (Eq.{1} Nat a b)` via
-   `Nat.beq` — would enable `if a = b then ... else ...` for Nat.
-   Needs Nat.succ-injectivity and Nat.succ ≠ 0 helpers.
+   (`decidable_compose.lean`); `Nat.decEq` is done (`nat_dec_eq.lean`).
+   Next: `Bool.decEq` (easy), `List.decEq` (recursion + IH), `Decidable
+   (Nat.le a b)` (would need a Nat.lt decision).
 
 4. **Indexed-inductive match v2 (recursive ctors)** — extend the v1
    indexed match to handle `Nat.le.step`, `Vec.cons`, etc.  Needs the
