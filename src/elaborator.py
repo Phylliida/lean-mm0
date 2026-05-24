@@ -854,11 +854,6 @@ class Elaborator:
                 raise ElabError(
                     f"cases: {head.name} is not an inductive")
             rec_decl = self.env.get(decl.recursor_name)
-            for rule in rec_decl.rules:
-                if rule.rec_arg_positions:
-                    raise ElabError(
-                        f"cases: recursive ctor {rule.ctor_name} not "
-                        f"yet supported (v1)")
             if decl.num_indices > 0:
                 raise ElabError(
                     f"cases: indexed inductive {head.name} not yet "
@@ -897,8 +892,22 @@ class Elaborator:
                             f"cases: bad ctor type for {ctor_name}")
                     field_types.append(ct.dom)
                     ct = ct.body
-                minor_ty = shift(G, cd.num_fields)
-                for j in reversed(range(cd.num_fields)):
+                rec_rule = next(
+                    (r for r in rec_decl.rules
+                     if r.ctor_name == ctor_name), None)
+                rec_positions = (rec_rule.rec_arg_positions
+                                 if rec_rule else ())
+                n_fields = cd.num_fields
+                n_rec = len(rec_positions)
+                # Minor type: Π fields, Π IHs, G (shifted by n_fields+n_rec).
+                # For non-dependent motive every IH type is just G shifted
+                # to the right depth (motive is constant).
+                minor_ty = shift(G, n_fields + n_rec)
+                for k in reversed(range(n_rec)):
+                    minor_ty = Pi(f"ih{k}",
+                                   shift(G, n_fields + k),
+                                   minor_ty)
+                for j in reversed(range(n_fields)):
                     minor_ty = Pi(f"f{j}", field_types[j], minor_ty)
                 m = self.mctx.fresh(minor_ty)
                 minors.append(m)

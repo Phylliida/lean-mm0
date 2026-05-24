@@ -25,3 +25,12 @@ def sum_to_nat (x : Sum.{1, 1} Nat Bool) : Nat :=
 
 example : Eq.{1} Nat (sum_to_nat (Sum.inl.{1, 1} Nat Bool 42)) 42 := by rfl
 example : Eq.{1} Nat (sum_to_nat (Sum.inr.{1, 1} Nat Bool Bool.true)) 7 := by rfl
+
+-- Cases on Nat: 2 subgoals.  Zero takes no fields.  Succ takes a Nat
+-- field and an IH (ignored here — cases doesn't expose recursion as
+-- naturally as a real `induction` tactic would).
+def is_zero_nat (n : Nat) : Bool :=
+  by cases n; exact Bool.true; intro k; intro ih; exact Bool.false
+
+example : Eq.{1} Bool (is_zero_nat 0) Bool.true := by rfl
+example : Eq.{1} Bool (is_zero_nat 5) Bool.false := by rfl
