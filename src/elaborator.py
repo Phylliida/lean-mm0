@@ -782,44 +782,62 @@ class Elaborator:
             return e_elab, remaining
 
         if kind == "intro":
-            _, name, sub_tac = tac
-            # Goal must be a Pi.
-            goal_w = self.kernel.whnf(self.mctx.instantiate(goal), ctx)
-            if not isinstance(goal_w, Pi):
-                raise ElabError(
-                    f"intro: goal is not a Pi, got {show_expr(goal_w)}")
-            dom = goal_w.dom
-            fv = ctx.push(name, dom)
-            try:
-                body_goal = open_(goal_w.body, FVar(fv, dom))
-                body_e, body_subs = self._run_tactic(sub_tac, body_goal, ctx)
-                body_e = self.mctx.instantiate(body_e)
-                # Body must fully resolve — subgoals can't escape the
-                # introduced binder in this prototype (they'd reference
-                # the popped fv).
-                unresolved = [m for m in body_subs
-                              if self.mctx.get(m) is None]
-                if unresolved:
-                    tys = "; ".join(
-                        show_expr(self.mctx.instantiate(
-                            self.mctx.get_type(m))) for m in unresolved)
-                    raise ElabError(
-                        f"intro: subgoals can't escape introduced binder "
-                        f"{name!r}: {tys}")
-                return Lam(name, dom, close(body_e, fv)), []
-            finally:
-                ctx.pop()
+            # Standalone intro outside a seq has no body to wrap.
+            raise ElabError(
+                "intro must appear inside a `;`-sequence with at least "
+                "one body tactic after it (e.g. `intro x; exact x`)")
 
         if kind == "seq":
             _, tacs = tac
-            if not tacs:
-                raise ElabError("empty tactic sequence")
-            first, *rest = tacs
-            main_term, sub_metas = self._run_tactic(first, goal, ctx)
+            return self._run_seq(tacs, goal, ctx)
+
+        raise ElabError(f"unknown tactic kind: {kind}")
+
+    def _run_seq(self, tacs: list, goal: Expr,
+                 ctx: LocalCtx) -> Tuple[Expr, List[int]]:
+        """Run a tactic sequence.
+
+        Leading `intro`s peel Π binders off the goal, pushing fresh FVars
+        onto `ctx`.  The first non-intro tactic produces the main term;
+        any subgoals it leaves are drained by the trailing tactics in
+        order.  After everything resolves, we wrap a Lam for each
+        introduced binder (innermost first), closing over its FVar.
+
+        Subsequent tactics that solve subgoals see the EXTENDED ctx — so
+        e.g. `intro h; apply f h; rfl` works even when the rfl is the
+        last tactic and `apply` produced a subgoal that doesn't reference
+        `h`.  This is the structural alternative to abstracting escaped
+        subgoals over the introduced binder."""
+        if not tacs:
+            raise ElabError("empty tactic sequence")
+        # Phase 1: consume leading intros.
+        intro_stack: List[Tuple[str, Expr, str]] = []     # (name, dom, fv)
+        cur_goal = goal
+        i = 0
+        try:
+            while i < len(tacs) and tacs[i][0] == "intro":
+                name = tacs[i][1]
+                goal_w = self.kernel.whnf(
+                    self.mctx.instantiate(cur_goal), ctx)
+                if not isinstance(goal_w, Pi):
+                    raise ElabError(
+                        f"intro {name!r}: goal is not a Π, got "
+                        f"{show_expr(goal_w)}")
+                dom = goal_w.dom
+                fv = ctx.push(name, dom)
+                intro_stack.append((name, dom, fv))
+                cur_goal = open_(goal_w.body, FVar(fv, dom))
+                i += 1
+            if i == len(tacs):
+                raise ElabError(
+                    "tactic sequence ends with intro — needs a body tactic")
+            # Phase 2: main tactic + drain its subgoals with trailing tacs.
+            main_tac = tacs[i]
+            rest = tacs[i + 1:]
+            main_term, sub_metas = self._run_tactic(main_tac, cur_goal, ctx)
             queue = list(sub_metas)
             rest_iter = iter(rest)
             while True:
-                # Skip subgoals that unification has already pinned.
                 while queue and self.mctx.get(queue[0]) is not None:
                     queue.pop(0)
                 if not queue:
@@ -844,9 +862,14 @@ class Elaborator:
                 raise ElabError(
                     f"extra tactics after all goals solved "
                     f"({len(extra)} unused)")
-            return self.mctx.instantiate(main_term), []
-
-        raise ElabError(f"unknown tactic kind: {kind}")
+            main_term = self.mctx.instantiate(main_term)
+            # Phase 3: wrap Lams (innermost-first).
+            for name, dom, fv in reversed(intro_stack):
+                main_term = Lam(name, dom, close(main_term, fv))
+            return main_term, []
+        finally:
+            for _ in intro_stack:
+                ctx.pop()
 
     # -- instance synthesis --
 

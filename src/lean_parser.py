@@ -43,7 +43,7 @@ from .expr import (
 # `By(tac_id)` AST node carries an index into it.  Tactic forms:
 #   ("exact", expr, bvar_stack)
 #   ("rfl",)
-#   ("intro", str, sub_tac)        -- intro x; <sub_tac>
+#   ("intro", str)                 -- standalone; seq peels Pi off goal
 #   ("apply", expr, bvar_stack)    -- apply f; <one tactic per subgoal>
 #   ("assumption",)
 #   ("seq", [tac1, tac2, ...])
@@ -751,14 +751,22 @@ class P:
     # ---- tactics ----
 
     def _parse_tactics(self, lvl_params, bvar_stack) -> tuple:
-        """Parse a tactic block: tac1; tac2; ...  (sequence)."""
+        """Parse a tactic block: tac1; tac2; ...  (sequence).
+
+        Threads `bvar_stack` so an `intro x` makes `x` parseable as a
+        BVar reference in subsequent tactics."""
         first = self._parse_single_tactic(lvl_params, bvar_stack)
+        if first[0] == "intro":
+            bvar_stack = bvar_stack + [first[1]]
         if not self.at(";"):
             return first
         tacs = [first]
         while self.at(";"):
             self.take()
-            tacs.append(self._parse_single_tactic(lvl_params, bvar_stack))
+            nxt = self._parse_single_tactic(lvl_params, bvar_stack)
+            tacs.append(nxt)
+            if nxt[0] == "intro":
+                bvar_stack = bvar_stack + [nxt[1]]
         return ("seq", tacs)
 
     def _parse_single_tactic(self, lvl_params, bvar_stack) -> tuple:
@@ -784,15 +792,15 @@ class P:
             name_tok = self.take()
             if name_tok.kind != "id":
                 raise SyntaxError("intro expects a name")
-            # The remainder of the tactic block runs with `name` in scope.
-            # If the next token starts another tactic-or-seq, swallow it as
-            # the body of this intro.
-            if self.at(";"):
-                self.take()
-                sub = self._parse_tactics(lvl_params, bvar_stack + [name_tok.text])
-            else:
-                sub = ("rfl",)  # no-op default
-            return ("intro", name_tok.text, sub)
+            # `intro` is a standalone tactic.  When it appears inside a
+            # `;`-sequence the seq interpreter peels a Pi binder off the
+            # current goal, pushes the introduced var onto the local
+            # context, and lets subsequent tactics see it.  This is
+            # different from older designs where intro would swallow the
+            # rest of the sequence as its body — that nested form made
+            # subgoals from later tactics (e.g. `apply`) unable to be
+            # solved by anything after the intro.
+            return ("intro", name_tok.text)
         raise SyntaxError(f"unknown tactic {t.text!r}")
 
     def parse_level(self, lvl_params: Tuple[str, ...]) -> Level:
