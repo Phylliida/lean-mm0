@@ -14,7 +14,7 @@ trust boundary.
 | Tests | **102 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 35 parser examples) |
 | Total source | ~6.4 kLoC Python + 188 LoC MM0 prelude + 1296 LoC `.lean` examples |
 | Trusted base | `src/mm0_verify.py` (669 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 32 commits on `master`; clean working tree |
+| Repo | 34 commits on `master`; clean working tree |
 
 ## What the pipeline does
 
@@ -214,6 +214,8 @@ a0db3b8  HANDOFF for Bool.decEq
 f236ace  Bool theory: not/and/or + not_not lemma
 b05c35c  HANDOFF for bool_ops
 27e631b  Nat.le lemmas: le_refl, le_trans
+7b94dad  HANDOFF for nat_le + name-mangling gotcha
+bf41a8e  Fix emitter name-mangling collision (escape '.' as '_d_')
 ```
 
 ### `383b984` — initial commit
@@ -626,12 +628,10 @@ Pieces ordered by impact and tractability:
   elaboration traces (instrumentation is currently removed but trivial
   to re-add at the `unify` and `elab` boundaries).
 
-- The emitter's name mangler converts dots to underscores when producing
-  MM0 symbols, so a def named `Foo.bar_baz` collides with a constructor
-  `Foo.bar.baz` (both emit `econst-Foo_bar_baz`).  The collision causes
-  the verifier to loop on a self-referential definition.  Pick names
-  that don't have this clash, or fix the mangler in `src/emitter.py`
-  (untrusted, so safe to touch).
+- The emitter escapes Lean dots as `_d_` (and other non-safe chars as
+  hex `_xNN_`) in the produced MM0 symbol names.  Earlier the encoder
+  collapsed both `.` and `_` into `_`, which caused collisions like
+  `Foo.bar_baz` ↔ `Foo.bar.baz`; fixed in `bf41a8e`.
 
 - The MM0 verifier's normalisation handles β, δ (via `def`), ζ, ι (via
   `iota` declarations), and level normalisation — all transitively.
