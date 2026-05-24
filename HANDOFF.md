@@ -11,10 +11,10 @@ trust boundary.
 
 | | |
 |---|---|
-| Tests | **102 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 35 parser examples) |
-| Total source | ~6.4 kLoC Python + 188 LoC MM0 prelude + 1296 LoC `.lean` examples |
+| Tests | **103 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 36 parser examples) |
+| Total source | ~6.5 kLoC Python + 188 LoC MM0 prelude + 1315 LoC `.lean` examples |
 | Trusted base | `src/mm0_verify.py` (669 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 34 commits on `master`; clean working tree |
+| Repo | 37 commits on `master`; clean working tree |
 
 ## What the pipeline does
 
@@ -155,6 +155,7 @@ What the parser accepts and the elaborator handles:
 | `apply f` | elaborate `f`, peel its Π binders as fresh metas, unify the return type with the goal; explicit metas the unifier didn't pin become subgoals (each carrying a ctx snapshot from creation) |
 | `assumption` | succeed if some local hypothesis (innermost-first) is def-equal to the goal |
 | `rewrite h` / `rw h` | h : Eq α a b — replaces all syntactic occurrences of `a` in the goal with `b`; leaves the rewritten goal as a subgoal |
+| `cases h` | h : `Ind params` — emits a recursor app with one fresh meta per ctor as a subgoal.  Each subgoal has type `Π fields, goal`; user `intro`s the fields.  v1: non-recursive non-indexed only |
 | `t1; t2; ...` | seq — focused-goal semantics: each tactic acts on the current focused goal.  Main intros are deferred until the very end so subgoal solutions can reference them as FVars; subgoal-local intros are wrapped into Lams immediately |
 
 ## Trust boundary detail
@@ -216,6 +217,8 @@ b05c35c  HANDOFF for bool_ops
 27e631b  Nat.le lemmas: le_refl, le_trans
 7b94dad  HANDOFF for nat_le + name-mangling gotcha
 bf41a8e  Fix emitter name-mangling collision (escape '.' as '_d_')
+f5e54a4  HANDOFF for emitter fix
+282e66d  cases tactic (v1: non-recursive non-indexed)
 ```
 
 ### `383b984` — initial commit
@@ -301,6 +304,19 @@ The skeleton with everything that works:
   inst slot would dangle)
 - New example `decidable.lean` (7 examples; includes nested ite, a
   `def choose` taking an explicit `Decidable c`, both branches verified)
+
+### `282e66d` — cases tactic (v1)
+
+`cases scrutinee` infers the scrutinee's inductive type, builds a
+non-dependent motive, and emits the recursor application with a fresh
+meta per ctor as a subgoal.  Each subgoal's type is `Π fields, goal`
+— the user `intro`s the fields manually.
+
+v1 limitations: non-recursive ctors only (recursive would need
+per-rec-arg IH motive plumbing), no indexed inductives (no index
+args passed yet).
+
+`cases.lean`: Bool, Decidable (1 field), Sum (parametric) demos.
 
 ### `a96a3b1` — Bool.decEq
 
@@ -574,9 +590,9 @@ Pieces ordered by impact and tractability:
    `mul_comm`, `mul_assoc`, `left_distrib`, `right_distrib` are next.
    Each is ~1-2 pages of induction + rewrite, no engine changes.
 
-2. **More tactics** — `rewrite` is in (`5380a78`); next are `simp`
-   (rewrite using an equation database), `revert` (the inverse of
-   `intro`), `cases` (eliminate an inductive hypothesis).
+2. **More tactics** — `rewrite` (`5380a78`) and `cases` v1 (`282e66d`)
+   are in.  Next: `simp` (rewrite using an equation database), `revert`
+   (the inverse of `intro`), `cases` v2 (recursive ctors with IH).
 
 3. **More Decidable instances** — `And` / `Or` / `Not` (`decidable_compose.lean`),
    `Nat.decEq` (`nat_dec_eq.lean`) and `Bool.decEq` (`bool_dec_eq.lean`) are
