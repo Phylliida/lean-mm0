@@ -865,6 +865,10 @@ class Elaborator:
             ind_applied = Const(decl.name, ind_lvls)
             for pa in param_args:
                 ind_applied = App(ind_applied, pa)
+            # v1: non-dependent motive only.  Dependent motive (motive
+            # body referencing the scrutinee) would need each minor's
+            # return type to be `G[scrut := ctor_pattern]`, which
+            # requires careful BVar bookkeeping that the v1 code skips.
             motive = Lam("_", ind_applied, shift(G, 1))
             G_ty_w = self.kernel.whnf(
                 self.mctx.instantiate(self._infer_elaborated(G, ctx)),
