@@ -11,10 +11,10 @@ trust boundary.
 
 | | |
 |---|---|
-| Tests | **93 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 26 parser examples) |
-| Total source | ~6.3 kLoC Python + 188 LoC MM0 prelude + 875 LoC `.lean` examples |
+| Tests | **94 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 27 parser examples) |
+| Total source | ~6.3 kLoC Python + 188 LoC MM0 prelude + 893 LoC `.lean` examples |
 | Trusted base | `src/mm0_verify.py` (669 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 14 commits on `master`; clean working tree |
+| Repo | 16 commits on `master`; clean working tree |
 
 ## What the pipeline does
 
@@ -124,7 +124,7 @@ What the parser accepts and the elaborator handles:
 | Implicit `{a : T}` binders | parser tags, elaborator inserts metas |
 | Instance-implicit `[a : T]` or `[T]` | elaborator does instance synthesis |
 | `@`-syntax | `@id.{1} Nat 3` — disable implicit insertion |
-| `match`/case | `match e : T with \| ... \| ...` (Nat, Bool, polymorphic List); `(motive := M)` annotation for dependent matches |
+| `match`/case | `match e : T with \| ... \| ...` (Nat, Bool, polymorphic List); `(motive := M)` annotation for dependent matches; indexed inductives (Eq, etc.) supported when motive is supplied AND no ctor is recursive |
 | Recursive `def` via top-level `match` | structural recursion → recursor IH (Nat, List) |
 | Numeric literals | `3` → `Nat.succ (Nat.succ (Nat.succ Nat.zero))` |
 | `by TAC` proofs | `by rfl`, `by intro x; exact x` |
@@ -195,6 +195,8 @@ e579ba5  apply + assumption tactics; subgoal-aware seq
 c05c399  (motive := M) annotation for dependent match
 bcc9dc8  HANDOFF for dependent match
 cbb4c96  Mid-seq intros via contextful subgoals
+971dea0  HANDOFF for mid-seq intros
+6ffe236  Indexed-inductive match v1 (non-recursive ctors)
 ```
 
 ### `383b984` — initial commit
@@ -280,6 +282,23 @@ The skeleton with everything that works:
   inst slot would dangle)
 - New example `decidable.lean` (7 examples; includes nested ite, a
   `def choose` taking an explicit `Decidable c`, both branches verified)
+
+### `6ffe236` — indexed-inductive match v1
+
+`match` now supports indexed inductives (Eq, Nat.le's refl-only
+slice, etc.) when:
+- the user supplies `(motive := M)` (matching the recursor's
+  `Π index..., scrut → Sort`), AND
+- no constructor has recursive fields (the IH-motive-application
+  logic doesn't yet thread per-rec-arg index expressions).
+
+After extracting params from the scrutinee's type, the remaining
+spine args become `index_args`, which get applied to the recursor
+between the minors and the scrutinee — matching the recursor's
+signature.
+
+`idx_match.lean`: `my_eq_symm` and `transport` both implemented by
+matching on the Eq proof.
 
 ### `cbb4c96` — mid-seq intros via contextful subgoals
 
@@ -456,33 +475,31 @@ up" below.
 
 Pieces ordered by impact and tractability:
 
-1. **Match on indexed inductives** — currently `match` errors on
-   inductives with `num_indices > 0` (e.g. Vec, Eq, Nat.le).  Even with
-   `(motive := M)` we don't yet support this.  The recursor's signature
-   includes the indices, which need to be inferred from the scrutinee's
-   type and passed in order.
-
-3. **`Nat.mul_comm`, `Nat.add_assoc`, `Nat.mul_one`** — Each follows the
+1. **`Nat.mul_comm`, `Nat.add_assoc`, `Nat.mul_one`** — Each follows the
    `add_comm` pattern; would build out a real `Nat` namespace.  ~1 page
    each.  Pure source-side work, no engine changes.
 
-4. **More tactics** — `rewrite` (instantiate `Eq.mpr` / `Eq.rec` with
+2. **More tactics** — `rewrite` (instantiate `Eq.mpr` / `Eq.rec` with
    HOP motive), `simp` (rewrite using an equation database), `revert`
-   (the inverse of `intro`, needed to make subgoals abstractable).
+   (the inverse of `intro`).
 
-5. **More Decidable instances** — `Decidable (Eq.{1} Nat a b)` via
+3. **More Decidable instances** — `Decidable (Eq.{1} Nat a b)` via
    `Nat.beq`, `Decidable.And`, `Decidable.Or`, `Decidable.Not`.  Once
    these exist, `if a = b then ... else ...` works for Nat.
 
-6. **Notation/macro system** — Generalise `infix` to arbitrary mixfix
+4. **Indexed-inductive match v2 (recursive ctors)** — extend the v1
+   indexed match to handle `Nat.le.step`, `Vec.cons`, etc.  Needs the
+   IH-motive-application logic to thread per-rec-arg index expressions.
+
+5. **Notation/macro system** — Generalise `infix` to arbitrary mixfix
    notation like `notation:50 "[" a "," b "]" => Prod.mk a b`.
    Needs a more flexible token-pattern parser.
 
-7. **Mutual inductives' cross-recursor** — Compile mutual `inductive`
+6. **Mutual inductives' cross-recursor** — Compile mutual `inductive`
    blocks to a single tag-discriminated inductive, generate a
    cross-recursor.  Substantial.
 
-8. **Lean elaborator-compat layer** — Read actual `.lean` files from
+7. **Lean elaborator-compat layer** — Read actual `.lean` files from
    Lean 4 source by being more permissive about syntax (newlines as
    separators, more notation forms).  Real Lean files require
    elaborator features that aren't trivially in scope, but a useful
