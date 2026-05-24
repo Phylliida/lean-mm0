@@ -135,6 +135,80 @@ def build_stdlib(env: Env) -> None:
     # ---- Nat operations: add, mul ----
     _build_nat_ops(env)
 
+    # ---- Eq.symm, Eq.trans ----
+    _build_eq_lemmas(env)
+
+
+def _build_eq_lemmas(env: Env) -> None:
+    """Add Eq.symm and Eq.trans, both built from Eq.rec."""
+    u = LParam("u")
+    α = Sort(u)
+    eq_u = lambda α_e, x, y: app_many(Const("Eq", (u,)), α_e, x, y)
+
+    # Eq.symm.{u} : Π α (a b : α), Eq α a b → Eq α b a
+    #   := λ α a b h, Eq.rec.{u, 0} α a (λ b' _. Eq α b' a) (Eq.refl α a) b h
+    motive_symm = Lam("b'", BVar(3),
+                       Lam("_eq", eq_u(BVar(4), BVar(3), BVar(0)),
+                           eq_u(BVar(5), BVar(1), BVar(4))))
+    val_symm = lam_many(
+        ("α", α),
+        ("a", BVar(0)),
+        ("b", BVar(1)),
+        ("h", eq_u(BVar(2), BVar(1), BVar(0))),
+        app_many(
+            Const("Eq.rec", (u, LZero())),
+            BVar(3), BVar(2), motive_symm,
+            app_many(Const("Eq.refl", (u,)), BVar(3), BVar(2)),
+            BVar(1), BVar(0),
+        ),
+    )
+    ty_symm = pi_many(
+        ("α", α),
+        ("a", BVar(0)),
+        ("b", BVar(1)),
+        ("h", eq_u(BVar(2), BVar(1), BVar(0))),
+        eq_u(BVar(3), BVar(1), BVar(2)),
+    )
+    env.add(Definition("Eq.symm", ("u",), ty_symm, val_symm))
+
+    # Eq.trans.{u} : Π α (a b c : α), Eq α a b → Eq α b c → Eq α a c
+    #   := λ α a b c h1 h2. Eq.rec.{u, 0} α b (λ w _. Eq α a w) h1 c h2
+    # Layout (innermost out): h2(0) h1(1) c(2) b(3) a(4) α(5).
+    # Motive: λ w : α, λ _ : Eq α b w, Eq α a w.
+    #   Inside motive scope (after w then _eq): _eq(0) w(1) h2(2) h1(3) c(4) b(5) a(6) α(7).
+    # Inside motive: _eq(0), w(1), h2(2), h1(3), c(4), b(5), a(6), α(7).
+    # Motive body should be `Eq α a w` (NOT `Eq α b w`).
+    motive_trans = Lam("w", BVar(5),
+                       Lam("_eq", eq_u(BVar(6), BVar(4), BVar(0)),
+                           eq_u(BVar(7), BVar(6), BVar(1))))
+    val_trans = lam_many(
+        ("α", α),
+        ("a", BVar(0)),
+        ("b", BVar(1)),
+        ("c", BVar(2)),
+        ("h1", eq_u(BVar(3), BVar(2), BVar(1))),
+        ("h2", eq_u(BVar(4), BVar(2), BVar(1))),
+        app_many(
+            Const("Eq.rec", (u, LZero())),
+            BVar(5),         # α
+            BVar(3),         # b (start point of Eq.rec)
+            motive_trans,
+            BVar(1),         # h1 : Eq α a b — used as P b case
+            BVar(2),         # c (the end)
+            BVar(0),         # h2 : Eq α b c
+        ),
+    )
+    ty_trans = pi_many(
+        ("α", α),
+        ("a", BVar(0)),
+        ("b", BVar(1)),
+        ("c", BVar(2)),
+        ("h1", eq_u(BVar(3), BVar(2), BVar(1))),
+        ("h2", eq_u(BVar(4), BVar(2), BVar(1))),
+        eq_u(BVar(5), BVar(4), BVar(2)),
+    )
+    env.add(Definition("Eq.trans", ("u",), ty_trans, val_trans))
+
 
 def _build_vec(env: Env) -> None:
     """

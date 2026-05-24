@@ -515,7 +515,9 @@ def b_eq_symm(env):
         ("h", eq_u(BVar(2), BVar(1), BVar(0))),
         eq_u(BVar(3), BVar(1), BVar(2)),                        # Eq α b a
     )
-    env.add(Definition("Eq.symm", ("u",), ty, val))
+    # Eq.symm is now in the stdlib; this test just references it.
+    if not env.has("Eq.symm"):
+        env.add(Definition("Eq.symm", ("u",), ty, val))
     return ["Eq.symm"]
 
 
