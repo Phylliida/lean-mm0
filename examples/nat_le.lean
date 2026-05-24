@@ -3,10 +3,10 @@
 -- yet handle recursive indexed inductives).
 
 -- Reflexivity is just the constructor.
-def le_refl (n : Nat) : Nat.le n n := Nat.le.refl n
+def Nat.le_refl (n : Nat) : Nat.le n n := Nat.le.refl n
 
 -- Transitivity by induction on the second hypothesis.
-def le_trans (a b c : Nat) (hab : Nat.le a b) (hbc : Nat.le b c) :
+def Nat.le_trans (a b c : Nat) (hab : Nat.le a b) (hbc : Nat.le b c) :
     Nat.le a c :=
   @Nat.le.rec.{0} b
     (fun (k : Nat) (_ : Nat.le b k) => Nat.le a k)
@@ -21,6 +21,6 @@ example : Nat.le 3 5 :=
 
 -- Transitivity in action.
 example : Nat.le 1 5 :=
-  le_trans 1 3 5
+  Nat.le_trans 1 3 5
     (Nat.le.step 1 2 (Nat.le.step 1 1 (Nat.le.refl 1)))
     (Nat.le.step 3 4 (Nat.le.step 3 3 (Nat.le.refl 3)))

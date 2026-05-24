@@ -31,26 +31,39 @@ from .mm0_verify import SExpr
 
 
 # ---------------- encoding to s-expressions ----------------
+#
+# Lean names can contain '.', which isn't a valid MM0 identifier char.
+# We escape '.' as '_d_' (NOT '_') so that `Foo.bar_baz` and `Foo.bar.baz`
+# emit distinct symbols.  Any other unsafe char becomes _xNN_ (hex).
 
-_ESCAPE_RE = re.compile(r"[^A-Za-z0-9_]")
+
+def _safe(n: str) -> str:
+    out = []
+    for c in n:
+        if c.isalnum() or c == "_":
+            out.append(c)
+        elif c == ".":
+            out.append("_d_")
+        else:
+            out.append(f"_x{ord(c):02x}_")
+    return "".join(out)
 
 
 def encode_name(n: str) -> str:
     """Make a Lean name safe to use as an MM0 identifier."""
-    return "econst-" + _ESCAPE_RE.sub("_", n)
+    return "econst-" + _safe(n)
 
 
 def encode_typing_name(n: str) -> str:
-    return _ESCAPE_RE.sub("_", n) + "-typing"
+    return _safe(n) + "-typing"
 
 
 def encode_delta_name(n: str) -> str:
-    return _ESCAPE_RE.sub("_", n) + "-delta"
+    return _safe(n) + "-delta"
 
 
 def encode_iota_name(rec_name: str, ctor_name: str) -> str:
-    return (_ESCAPE_RE.sub("_", rec_name) + "-iota-" +
-            _ESCAPE_RE.sub("_", ctor_name))
+    return _safe(rec_name) + "-iota-" + _safe(ctor_name)
 
 
 def _nat_lit(n: int) -> SExpr:
