@@ -632,9 +632,24 @@ class P:
             return By(tac_id)
         if t.text == "match":
             self.take()
+            # Optional `(motive := M)` annotation before the scrutinee.
+            # When supplied, the compiler uses M directly as the recursor's
+            # motive (dependent), and skips the non-dependent fast paths.
+            motive_override = None
+            if (self.at("(") and self.i + 1 < len(self.toks)
+                    and self.toks[self.i + 1].text == "motive"):
+                self.take()                      # '('
+                self.take()                      # 'motive'
+                self.eat(":=")
+                motive_override = self.parse_expr(lvl_params, bvar_stack)
+                self.eat(")")
             scrutinee = self.parse_app(lvl_params, bvar_stack)
-            self.eat(":")
-            result_ty = self.parse_arrow(lvl_params, bvar_stack)
+            if motive_override is not None:
+                # The result type can be derived from M applied to scrut.
+                result_ty = App(motive_override, scrutinee)
+            else:
+                self.eat(":")
+                result_ty = self.parse_arrow(lvl_params, bvar_stack)
             self.eat("with")
             arms = []
             while self.at("|"):
@@ -672,7 +687,8 @@ class P:
             return _compile_match(scrutinee, result_ty, arms, self.env,
                                   lvl_params, bvar_stack, rec_name=rec_name,
                                   scrut_ty_hint=scrut_ty_hint,
-                                  rec_arg_pos=rec_arg_pos)
+                                  rec_arg_pos=rec_arg_pos,
+                                  motive_override=motive_override)
         if t.text == "let":
             self.take()
             nm = self.take()
@@ -938,20 +954,25 @@ def _compile_match(scrutinee: Expr, result_ty: Expr,
                    bvar_stack: Optional[List[str]] = None,
                    rec_name: Optional[str] = None,
                    scrut_ty_hint: Optional[Expr] = None,
-                   rec_arg_pos: int = -1) -> Expr:
+                   rec_arg_pos: int = -1,
+                   motive_override: Optional[Expr] = None) -> Expr:
     """Compile a `match` to a recursor application.
 
     Without env: Nat and Bool only.
     With env:  also polymorphic non-indexed inductives whose parameters can
                be extracted from the scrutinee's type via the kernel.
+
+    When motive_override is given, the fast paths are skipped and the
+    user-supplied motive is used directly — enabling dependent matches
+    where each arm's result type can mention the scrutinee.
     """
     from .expr import shift as _se
     ctor_names = {c[0] for c in arms}
     Nat = Const("Nat", ())
     Bool = Const("Bool", ())
     one = LSucc(LZero())
-    # Bool
-    if ctor_names <= {"Bool.true", "Bool.false"}:
+    # Bool (non-dependent only)
+    if motive_override is None and ctor_names <= {"Bool.true", "Bool.false"}:
         rhs_false = rhs_true = None
         for c, _, r in arms:
             if c == "Bool.false": rhs_false = r
@@ -962,8 +983,8 @@ def _compile_match(scrutinee: Expr, result_ty: Expr,
         return App(App(App(App(Const("Bool.rec", (one,)), motive),
                             rhs_false), rhs_true),
                    scrutinee)
-    # Nat
-    if ctor_names <= {"Nat.zero", "Nat.succ"}:
+    # Nat (non-dependent only)
+    if motive_override is None and ctor_names <= {"Nat.zero", "Nat.succ"}:
         rhs_zero = None
         succ_var = None; rhs_succ = None
         for c, vs, r in arms:
@@ -1051,13 +1072,15 @@ def _compile_match(scrutinee: Expr, result_ty: Expr,
     param_args = spine_args[:ind_decl.num_params]
     ind_lvls = head_e.levels
 
-    # Build motive: λ _ : (ind_name lvls) params..., result_ty
-    # result_ty was parsed in the OUTER scope; inside the motive's `_`
-    # binder it sits one level deeper, so its BVars shift up by 1.
+    # Build motive: when the user supplied one, use it directly; otherwise
+    # synthesise the non-dependent λ _ : (ind_name lvls) params..., result_ty.
     ind_applied = Const(ind_name, ind_lvls)
     for pa in param_args:
         ind_applied = App(ind_applied, pa)
-    motive = Lam("_", ind_applied, _se(result_ty, 1))
+    if motive_override is not None:
+        motive = motive_override
+    else:
+        motive = Lam("_", ind_applied, _se(result_ty, 1))
 
     # Build minors in ctor declaration order
     minors: List[Expr] = []

@@ -125,6 +125,10 @@ def test_parse_and_verify_intro_seq():
     _run_example("intro_seq.lean")
 
 
+def test_parse_and_verify_dep_match():
+    _run_example("dep_match.lean")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in list(globals().items()) if k.startswith("test_")]
     passed = failed = 0
