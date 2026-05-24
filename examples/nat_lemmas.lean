@@ -113,3 +113,23 @@ def one_mul (n : Nat) : Eq.{1} Nat (Nat.mul 1 n) n :=
     n
 
 example : Eq.{1} Nat (Nat.mul 1 4) 4 := one_mul 4
+
+-- ============================================================
+-- Same statements via the rewrite tactic — much shorter.
+-- ============================================================
+
+-- add_one (n) : 1 + n = succ n.  Two rewrites + refl.
+def add_one (n : Nat) : Eq.{1} Nat (Nat.add 1 n) (Nat.succ n) :=
+  by rewrite (succ_add 0 n); rewrite (zero_add n); apply Eq.refl
+
+-- Symmetry the easy way.
+def sym_via_rw.{u} {α : Sort u} (a b : α) (h : Eq.{u} α a b) :
+    Eq.{u} α b a :=
+  by rewrite h; apply Eq.refl
+
+-- Apply succ to both sides of an equality.
+def lift_succ (m n : Nat) (h : Eq.{1} Nat m n) :
+    Eq.{1} Nat (Nat.succ m) (Nat.succ n) :=
+  by rewrite h; apply Eq.refl
+
+example : Eq.{1} Nat (Nat.add 1 5) 6 := add_one 5
