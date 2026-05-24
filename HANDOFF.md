@@ -11,10 +11,10 @@ trust boundary.
 
 | | |
 |---|---|
-| Tests | **96 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 29 parser examples) |
-| Total source | ~6.4 kLoC Python + 188 LoC MM0 prelude + 1028 LoC `.lean` examples |
+| Tests | **97 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 30 parser examples) |
+| Total source | ~6.4 kLoC Python + 188 LoC MM0 prelude + 1112 LoC `.lean` examples |
 | Trusted base | `src/mm0_verify.py` (669 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 19 commits on `master`; clean working tree |
+| Repo | 22 commits on `master`; clean working tree |
 
 ## What the pipeline does
 
@@ -202,6 +202,9 @@ cbb4c96  Mid-seq intros via contextful subgoals
 474b45b  Nat lemmas: add_zero/mul_zero/mul_one/add_assoc/zero_mul/one_mul
 1ca6361  HANDOFF for Nat lemmas
 5380a78  rewrite tactic (rw alias)
+45eb5a2  HANDOFF for rewrite
+85f9ff3  nat_lemmas extended with rewrite-based proofs
+f38d618  Decidable composition: And/Or/Not instances
 ```
 
 ### `383b984` — initial commit
@@ -287,6 +290,25 @@ The skeleton with everything that works:
   inst slot would dangle)
 - New example `decidable.lean` (7 examples; includes nested ite, a
   `def choose` taking an explicit `Decidable c`, both branches verified)
+
+### `f38d618` — compositional Decidable instances
+
+`examples/decidable_compose.lean` adds user-side `instDecidableAnd`,
+`instDecidableOr`, `instDecidableNot`.  Each takes the sub-Decidable
+as inst-implicit and produces the composite via nested `match` on
+the Decidable scrutinees.  Registering them as `instance` lets
+`if (And p q) then ... else ...` synthesise recursively through the
+proposition structure.
+
+Note: instances must have **implicit** binders for the class
+parameters (not explicit) — `_try_instance` only consumes
+implicit/inst-implicit prefixes, so explicit binders block unification
+with the goal.
+
+`examples/nat_lemmas.lean` was extended with `add_one`, `sym_via_rw`,
+`lift_succ` (`85f9ff3`) — three small proofs demonstrating that the
+`rewrite` tactic dramatically shortens what would otherwise be nested
+`Eq.rec` chains.
 
 ### `5380a78` — rewrite tactic
 
@@ -524,9 +546,10 @@ Pieces ordered by impact and tractability:
    (rewrite using an equation database), `revert` (the inverse of
    `intro`), `cases` (eliminate an inductive hypothesis).
 
-3. **More Decidable instances** — `Decidable (Eq.{1} Nat a b)` via
-   `Nat.beq`, `Decidable.And`, `Decidable.Or`, `Decidable.Not`.  Once
-   these exist, `if a = b then ... else ...` works for Nat.
+3. **More Decidable instances** — `And` / `Or` / `Not` are done
+   (`decidable_compose.lean`).  Next: `Decidable (Eq.{1} Nat a b)` via
+   `Nat.beq` — would enable `if a = b then ... else ...` for Nat.
+   Needs Nat.succ-injectivity and Nat.succ ≠ 0 helpers.
 
 4. **Indexed-inductive match v2 (recursive ctors)** — extend the v1
    indexed match to handle `Nat.le.step`, `Vec.cons`, etc.  Needs the
