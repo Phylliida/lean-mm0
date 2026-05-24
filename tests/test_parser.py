@@ -14,17 +14,20 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 EXAMPLES = os.path.normpath(os.path.join(HERE, "..", "examples"))
 
 
-def _run_example(filename: str):
+def _run_example(*filenames: str):
     env = Env()
     build_stdlib(env)
-    with open(os.path.join(EXAMPLES, filename)) as f:
-        src = f.read()
-    added = elaborate(src, env)
+    added_all: list = []
+    for filename in filenames:
+        with open(os.path.join(EXAMPLES, filename)) as f:
+            src = f.read()
+        added = elaborate(src, env)
+        added_all.extend(added)
     out = io.StringIO()
-    emit_env(env, out, only=added)
+    emit_env(env, out, only=added_all)
     venv = verify_file(os.path.join(HERE, "..", "prelude", "cic.mm0"))
     pre = io.StringIO()
-    emit_env(env, pre, only=[n for n in env.order if n not in added])
+    emit_env(env, pre, only=[n for n in env.order if n not in added_all])
     verify_text(pre.getvalue(), venv)
     verify_text(out.getvalue(), venv)
 
@@ -135,6 +138,11 @@ def test_parse_and_verify_mid_seq():
 
 def test_parse_and_verify_idx_match():
     _run_example("idx_match.lean")
+
+
+def test_parse_and_verify_nat_lemmas():
+    # nat_lemmas builds on math's zero_add / succ_add
+    _run_example("math.lean", "nat_lemmas.lean")
 
 
 if __name__ == "__main__":
