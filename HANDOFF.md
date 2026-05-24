@@ -11,10 +11,10 @@ trust boundary.
 
 | | |
 |---|---|
-| Tests | **100 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 33 parser examples) |
-| Total source | ~6.4 kLoC Python + 188 LoC MM0 prelude + 1233 LoC `.lean` examples |
+| Tests | **101 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 34 parser examples) |
+| Total source | ~6.4 kLoC Python + 188 LoC MM0 prelude + 1266 LoC `.lean` examples |
 | Trusted base | `src/mm0_verify.py` (669 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 29 commits on `master`; clean working tree |
+| Repo | 30 commits on `master`; clean working tree |
 
 ## What the pipeline does
 
@@ -210,6 +210,8 @@ f38d618  Decidable composition: And/Or/Not instances
 9071956  Nat.decEq via Nat.rec with Π-typed motive
 e86a85f  HANDOFF for nat_inj + Nat.decEq
 a96a3b1  Bool.decEq with no-confusion helpers
+a0db3b8  HANDOFF for Bool.decEq
+f236ace  Bool theory: not/and/or + not_not lemma
 ```
 
 ### `383b984` — initial commit
