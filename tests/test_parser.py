@@ -145,6 +145,10 @@ def test_parse_and_verify_nat_lemmas():
     _run_example("math.lean", "nat_lemmas.lean")
 
 
+def test_parse_and_verify_rewrite():
+    _run_example("rewrite.lean")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in list(globals().items()) if k.startswith("test_")]
     passed = failed = 0

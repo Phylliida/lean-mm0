@@ -146,6 +146,42 @@ class MetaContext:
         return out
 
 
+def _replace_term(e: Expr, target: Expr, replacement: Expr) -> Tuple[Expr, bool]:
+    """Walk `e` substituting `replacement` for every subterm structurally
+    equal to `target`.  Returns (new_expr, found_any).  When descending
+    into a Lam/Pi/Let body, shifts both `target` and `replacement` by 1
+    so BVar references stay consistent."""
+    if e == target:
+        return replacement, True
+    if isinstance(e, (Sort, BVar, FVar, Const, Meta, By)):
+        return e, False
+    if isinstance(e, Explicit):
+        inner_new, f = _replace_term(e.inner, target, replacement)
+        return Explicit(inner_new), f
+    if isinstance(e, App):
+        fn_new, f1 = _replace_term(e.fn, target, replacement)
+        arg_new, f2 = _replace_term(e.arg, target, replacement)
+        return App(fn_new, arg_new), f1 or f2
+    if isinstance(e, Lam):
+        dom_new, f1 = _replace_term(e.dom, target, replacement)
+        body_new, f2 = _replace_term(
+            e.body, shift(target, 1), shift(replacement, 1))
+        return Lam(e.binder, dom_new, body_new), f1 or f2
+    if isinstance(e, Pi):
+        dom_new, f1 = _replace_term(e.dom, target, replacement)
+        body_new, f2 = _replace_term(
+            e.body, shift(target, 1), shift(replacement, 1))
+        return Pi(e.binder, dom_new, body_new,
+                  e.implicit, e.inst_implicit), f1 or f2
+    if isinstance(e, Let):
+        type_new, f1 = _replace_term(e.type_, target, replacement)
+        value_new, f2 = _replace_term(e.value, target, replacement)
+        body_new, f3 = _replace_term(
+            e.body, shift(target, 1), shift(replacement, 1))
+        return Let(e.binder, type_new, value_new, body_new), f1 or f2 or f3
+    raise TypeError(e)
+
+
 def _subgoal_meta_id(sub) -> int:
     """A subgoal is either a bare meta_id (legacy) or (meta_id, ctx_snap)."""
     return sub[0] if isinstance(sub, tuple) else sub
@@ -801,6 +837,61 @@ class Elaborator:
             remaining = [(m, ctx_snap) for m in explicit_metas
                          if self.mctx.get(m) is None]
             return e_elab, remaining
+
+        if kind == "rewrite":
+            _, expr, _bvar_stack = tac
+            expr_r = _resolve_bvars(expr, ctx)
+            h_elab, h_ty = self.elab(expr_r, None, ctx)
+            h_ty_w = self.kernel.whnf(
+                self.mctx.instantiate(h_ty), ctx)
+            head, args = _spine(h_ty_w)
+            if not (isinstance(head, Const) and head.name == "Eq"
+                    and len(args) == 3):
+                raise ElabError(
+                    f"rewrite: hypothesis must have type `Eq α a b`, "
+                    f"got {show_expr(h_ty_w)}")
+            α, a, b = args
+            u_level = head.levels[0]
+            G = self.mctx.instantiate(goal)
+            # Determine v from the goal's type — the motive's body IS the
+            # goal (modulo the abstraction), so its level is the goal's.
+            G_ty_w = self.kernel.whnf(
+                self.mctx.instantiate(self._infer_elaborated(G, ctx)),
+                ctx)
+            if not isinstance(G_ty_w, Sort):
+                raise ElabError(
+                    f"rewrite: goal's type is not a Sort: "
+                    f"{show_expr(G_ty_w)}")
+            v_level = G_ty_w.level
+            # For v1 we only support `a` being a closed expression that
+            # appears in G by structural equality.  Walk G replacing each
+            # such occurrence with BVar(1) (which will be the motive's
+            # `a'` binder).
+            G_shifted = shift(G, 2)
+            replaced, occurred = _replace_term(
+                G_shifted, shift(a, 2), BVar(1))
+            if not occurred:
+                raise ElabError(
+                    f"rewrite: LHS {show_expr(a)} not found in goal "
+                    f"{show_expr(G)}")
+            motive_body = replaced                      # under 2 Lams: a', _hp
+            inner_lam = Lam(
+                "_hp",
+                # `Eq.{u} α b a'` at outer-Lam scope (one binder)
+                App(App(App(Const("Eq", (u_level,)), shift(α, 1)),
+                        shift(b, 1)), BVar(0)),
+                motive_body)
+            motive = Lam("a'", α, inner_lam)
+            sym_h = App(App(App(App(Const("Eq.symm", (u_level,)), α), a),
+                            b), h_elab)
+            # New subgoal type: G with `a` replaced by `b` (rewritten goal).
+            new_goal, _ = _replace_term(G, a, b)
+            sub_meta = self.mctx.fresh(new_goal)
+            term = App(App(App(App(App(App(
+                Const("Eq.rec", (u_level, v_level)),
+                α), b), motive), sub_meta), a), sym_h)
+            ctx_snap = tuple(ctx.entries)
+            return term, [(sub_meta.id, ctx_snap)]
 
         if kind == "intro":
             # Standalone intro outside a seq has no body to wrap.

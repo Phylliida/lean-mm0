@@ -46,6 +46,7 @@ from .expr import (
 #   ("intro", str)                 -- standalone; seq peels Pi off goal
 #   ("apply", expr, bvar_stack)    -- apply f; <one tactic per subgoal>
 #   ("assumption",)
+#   ("rewrite", expr, bvar_stack)  -- rewrite h : a = b in the goal
 #   ("seq", [tac1, tac2, ...])
 
 _TACTIC_REGISTRY: List[tuple] = []
@@ -78,6 +79,7 @@ KEYWORDS = {"def", "axiom", "theorem", "example", "instance",
             "fun", "lam", "let", "in",
             "Sort", "Type", "Prop", "forall", "match", "with", "where",
             "by", "exact", "rfl", "intro", "apply", "assumption",
+            "rewrite", "rw",
             "if", "then", "else",
             "->", "=>", ":=", ":", ",", ";",
             "(", ")", ".{", "}", "|", "[", "]"}
@@ -135,6 +137,7 @@ def lex(src: str) -> List[Tok]:
                                     "forall", "match", "with", "where",
                                     "by", "exact", "rfl", "intro",
                                     "apply", "assumption",
+                                    "rewrite", "rw",
                                     "if", "then", "else"} else "id"
             out.append(Tok(kind, text, i)); i = j; continue
         raise SyntaxError(f"unexpected character {c!r} at {i}")
@@ -803,6 +806,10 @@ class P:
         if t.text == "assumption":
             self.take()
             return ("assumption",)
+        if t.text in ("rewrite", "rw"):
+            self.take()
+            e = self.parse_expr(lvl_params, bvar_stack)
+            return ("rewrite", e, list(bvar_stack))
         if t.text == "intro":
             self.take()
             name_tok = self.take()
