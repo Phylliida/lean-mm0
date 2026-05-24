@@ -133,6 +133,10 @@ def test_parse_and_verify_mid_seq():
     _run_example("mid_seq.lean")
 
 
+def test_parse_and_verify_idx_match():
+    _run_example("idx_match.lean")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in list(globals().items()) if k.startswith("test_")]
     passed = failed = 0

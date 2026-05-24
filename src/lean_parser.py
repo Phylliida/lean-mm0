@@ -1036,9 +1036,23 @@ def _compile_match(scrutinee: Expr, result_ty: Expr,
     ind_decl = env.get(ind_name)
     rec_decl = env.get(ind_decl.recursor_name)
 
-    if ind_decl.num_indices != 0:
-        raise SyntaxError(
-            f"match on indexed inductive {ind_name} not yet supported")
+    if ind_decl.num_indices > 0:
+        if motive_override is None:
+            raise SyntaxError(
+                f"match on indexed inductive {ind_name} requires "
+                f"(motive := ...)")
+        # No-recursive-fields check: indexed recursors with rec-args
+        # need indices for each rec call too, which the current minor
+        # builder doesn't supply.
+        for cn in ind_decl.constructor_names:
+            cd = env.get(cn)
+            r = next((rule for rule in rec_decl.rules
+                      if rule.ctor_name == cn), None)
+            if r is not None and r.rec_arg_positions:
+                raise SyntaxError(
+                    f"match on indexed inductive {ind_name} with "
+                    f"recursive ctor {cn} not yet supported (use the "
+                    f"recursor directly)")
 
     # Determine the scrutinee's type: prefer the hint (from the
     # surrounding def's binder annotation) over running the kernel,
@@ -1070,6 +1084,8 @@ def _compile_match(scrutinee: Expr, result_ty: Expr,
         raise SyntaxError(
             f"scrutinee type {head_e} doesn't match inductive {ind_name}")
     param_args = spine_args[:ind_decl.num_params]
+    index_args = spine_args[ind_decl.num_params:
+                            ind_decl.num_params + ind_decl.num_indices]
     ind_lvls = head_e.levels
 
     # Build motive: when the user supplied one, use it directly; otherwise
@@ -1185,6 +1201,8 @@ def _compile_match(scrutinee: Expr, result_ty: Expr,
     rec_head = App(rec_head, motive)
     for mn in minors:
         rec_head = App(rec_head, mn)
+    for ia in index_args:
+        rec_head = App(rec_head, ia)
     rec_head = App(rec_head, scrutinee)
     return rec_head
 
