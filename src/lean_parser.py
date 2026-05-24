@@ -33,7 +33,8 @@ from .levels import (
     Level, LZero, LSucc, LParam, level_succ,
 )
 from .expr import (
-    Expr, Sort, BVar, FVar, Const, App, Lam, Pi, Let, Meta, By,
+    Expr, Sort, BVar, FVar, Const, App, Lam, Pi, Let, Meta, By, Explicit,
+    app_many,
 )
 
 
@@ -77,6 +78,7 @@ KEYWORDS = {"def", "axiom", "theorem", "example", "instance",
             "fun", "lam", "let", "in",
             "Sort", "Type", "Prop", "forall", "match", "with", "where",
             "by", "exact", "rfl", "intro", "apply", "assumption",
+            "if", "then", "else",
             "->", "=>", ":=", ":", ",", ";",
             "(", ")", ".{", "}", "|", "[", "]"}
 
@@ -132,7 +134,8 @@ def lex(src: str) -> List[Tok]:
                                     "Sort", "Type", "Prop",
                                     "forall", "match", "with", "where",
                                     "by", "exact", "rfl", "intro",
-                                    "apply", "assumption"} else "id"
+                                    "apply", "assumption",
+                                    "if", "then", "else"} else "id"
             out.append(Tok(kind, text, i)); i = j; continue
         raise SyntaxError(f"unexpected character {c!r} at {i}")
     return out
@@ -699,6 +702,19 @@ class P:
         if t.text == "Prop":
             self.take()
             return Sort(LZero())
+        if t.text == "if":
+            self.take()
+            c = self.parse_expr(lvl_params, bvar_stack)
+            self.eat("then")
+            a = self.parse_expr(lvl_params, bvar_stack)
+            self.eat("else")
+            b = self.parse_expr(lvl_params, bvar_stack)
+            # Desugar to `@ite _ c _ a b`: the level meta + α + d are
+            # filled by the elaborator.  `@` disables auto-implicit
+            # insertion so our manual holes line up with ite's binders.
+            HOLE = Const("_", ())
+            ite_head = Explicit(Const("ite", ()))
+            return app_many(ite_head, HOLE, c, HOLE, a, b)
         if t.kind == "id":
             self.take()
             # check for level-instance:  ident.{l1, l2}
@@ -711,6 +727,10 @@ class P:
                     lvls.append(self.parse_level(lvl_params))
                 self.eat("}")
                 level_args = tuple(lvls)
+            # `_` in expression position is always a hole, never a BVar
+            # — the elaborator turns it into a fresh meta.
+            if t.text == "_" and not level_args:
+                return Const("_", ())
             # BVar lookup
             if t.text in bvar_stack and not level_args:
                 # find innermost occurrence

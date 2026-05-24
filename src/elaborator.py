@@ -435,6 +435,17 @@ class Elaborator:
             if expected is None:
                 raise ElabError("`by` needs an expected type")
             return self._run_tactic_by(head, expected, ctx), expected
+        # `_` hole sentinel — Const("_", ()) emitted by the parser.
+        # Becomes a fresh meta typed by `expected` (or a meta-of-meta type
+        # if expected is unknown).
+        if (isinstance(head, Const) and head.name == "_"
+                and not args and not head.levels):
+            if expected is None:
+                ty_meta = self.mctx.fresh(Sort(self.mctx.fresh_level()))
+                m = self.mctx.fresh(ty_meta)
+            else:
+                m = self.mctx.fresh(expected)
+            return m, self.mctx.get_type(m.id)
         # Bare Lam at the head with no args and a known expected type:
         # propagate the expected's body into the Lam's body so `by` and
         # other expectation-sensitive forms can see it.
@@ -486,6 +497,17 @@ class Elaborator:
                         f"argument type mismatch:\n"
                         f"  expected {show_expr(self.mctx.instantiate(dom))}\n"
                         f"  got      {show_expr(self.mctx.instantiate(arg_ty))}")
+            # If the user passed `_` for a slot whose type is a registered
+            # class, queue it for instance synthesis after explicit args
+            # have pinned its type.  (Without this, `@f _ _` for an inst
+            # arg slot leaves a meta with no way to fill it.)
+            if (isinstance(arg_e, Meta)
+                    and self.mctx.get(arg_e.id) is None):
+                dom_w = self.kernel.whnf(self.mctx.instantiate(dom), ctx)
+                dom_head, _ = _spine(dom_w)
+                if (isinstance(dom_head, Const)
+                        and self.env.instances_of(dom_head.name)):
+                    pending_inst_metas.append((arg_e, dom))
             head_e = App(head_e, arg_e)
             head_ty = subst_bvar(head_ty_w.body, 0, arg_e)
 

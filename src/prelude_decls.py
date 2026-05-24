@@ -138,6 +138,92 @@ def build_stdlib(env: Env) -> None:
     # ---- Eq.symm, Eq.trans ----
     _build_eq_lemmas(env)
 
+    # ---- Not, Decidable, ite ----
+    _build_decidable(env)
+
+
+def _build_decidable(env: Env) -> None:
+    u = LParam("u")
+
+    # Not p := p → False
+    env.add(Definition(
+        "Not", (),
+        Pi("_p", PROP, PROP),
+        Lam("p", PROP, Pi("_", BVar(0), Const("False", ()))),
+    ))
+
+    # inductive Decidable (p : Prop) : Type
+    #   | isFalse (h : Not p) : Decidable p
+    #   | isTrue  (h : p)     : Decidable p
+    compile_inductive(env, InductiveSpec(
+        name="Decidable",
+        level_params=(),
+        params=(("p", PROP),),
+        sort=TYPE0,
+        constructors=(
+            CtorSpec(name="Decidable.isFalse", arg_types=(
+                ("h", App(Const("Not", ()), BVar(0))),
+            )),
+            CtorSpec(name="Decidable.isTrue", arg_types=(
+                ("h", BVar(0)),
+            )),
+        ),
+    ))
+
+    # Decidable instances for True and False (used by `if True then ...` etc.)
+    env.add(Definition(
+        "instDecidableTrue", (),
+        App(Const("Decidable", ()), Const("True", ())),
+        App(App(Const("Decidable.isTrue", ()), Const("True", ())),
+            Const("True.intro", ())),
+    ))
+    env.register_instance("instDecidableTrue", "Decidable")
+    env.add(Definition(
+        "instDecidableFalse", (),
+        App(Const("Decidable", ()), Const("False", ())),
+        # Not False = False → False; the identity inhabits it.
+        App(App(Const("Decidable.isFalse", ()), Const("False", ())),
+            Lam("h", Const("False", ()), BVar(0))),
+    ))
+    env.register_instance("instDecidableFalse", "Decidable")
+
+    # ite.{u} {α : Sort u} {c : Prop} [d : Decidable c] (t e : α) : α
+    #   := Decidable.rec.{u} c (fun _ : Decidable c => α) (fun _ : Not c => e)
+    #                          (fun _ : c => t) d
+    # Stack inside the body (innermost first): e(0), t(1), d(2), c(3), α(4).
+    ite_ty = Pi("α", Sort(u),
+             Pi("c", PROP,
+             Pi("d", App(Const("Decidable", ()), BVar(0)),
+             Pi("t", BVar(2),
+             Pi("e", BVar(3),
+                BVar(4))),
+             inst_implicit=True),
+             implicit=True),
+             implicit=True)
+
+    # body: Decidable.rec.{u} c motive minor_isFalse minor_isTrue d
+    #   motive       = fun _d : Decidable c, α      (inside motive: α was BVar(4), shifts to 5)
+    #   minor_isFalse = fun _h : Not c, e           (inside: e was BVar(0), shifts to 1)
+    #   minor_isTrue  = fun _h : c, t               (inside: t was BVar(1), shifts to 2)
+    ite_val = Lam("α", Sort(u),
+              Lam("c", PROP,
+              Lam("d", App(Const("Decidable", ()), BVar(0)),
+              Lam("t", BVar(2),
+              Lam("e", BVar(3),
+                  app_many(
+                      Const("Decidable.rec", (u,)),
+                      BVar(3),                                                # c
+                      Lam("_d", App(Const("Decidable", ()), BVar(3)),         # motive
+                          BVar(5)),
+                      Lam("_h", App(Const("Not", ()), BVar(3)),               # minor isFalse: λ _, e
+                          BVar(1)),
+                      Lam("_h", BVar(3),                                      # minor isTrue: λ _, t
+                          BVar(2)),
+                      BVar(2),                                                # d
+                  )
+              )))))
+    env.add(Definition("ite", ("u",), ite_ty, ite_val))
+
 
 def _build_eq_lemmas(env: Env) -> None:
     """Add Eq.symm and Eq.trans, both built from Eq.rec."""
