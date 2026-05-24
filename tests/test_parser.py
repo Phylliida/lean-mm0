@@ -173,6 +173,10 @@ def test_parse_and_verify_nat_le():
     _run_example("nat_le.lean")
 
 
+def test_parse_and_verify_cases():
+    _run_example("cases.lean")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in list(globals().items()) if k.startswith("test_")]
     passed = failed = 0

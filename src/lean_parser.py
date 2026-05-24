@@ -47,6 +47,7 @@ from .expr import (
 #   ("apply", expr, bvar_stack)    -- apply f; <one tactic per subgoal>
 #   ("assumption",)
 #   ("rewrite", expr, bvar_stack)  -- rewrite h : a = b in the goal
+#   ("cases", expr, bvar_stack)    -- case-split on a scrutinee
 #   ("seq", [tac1, tac2, ...])
 
 _TACTIC_REGISTRY: List[tuple] = []
@@ -79,7 +80,7 @@ KEYWORDS = {"def", "axiom", "theorem", "example", "instance",
             "fun", "lam", "let", "in",
             "Sort", "Type", "Prop", "forall", "match", "with", "where",
             "by", "exact", "rfl", "intro", "apply", "assumption",
-            "rewrite", "rw",
+            "rewrite", "rw", "cases",
             "if", "then", "else",
             "->", "=>", ":=", ":", ",", ";",
             "(", ")", ".{", "}", "|", "[", "]"}
@@ -137,7 +138,7 @@ def lex(src: str) -> List[Tok]:
                                     "forall", "match", "with", "where",
                                     "by", "exact", "rfl", "intro",
                                     "apply", "assumption",
-                                    "rewrite", "rw",
+                                    "rewrite", "rw", "cases",
                                     "if", "then", "else"} else "id"
             out.append(Tok(kind, text, i)); i = j; continue
         raise SyntaxError(f"unexpected character {c!r} at {i}")
@@ -810,6 +811,10 @@ class P:
             self.take()
             e = self.parse_expr(lvl_params, bvar_stack)
             return ("rewrite", e, list(bvar_stack))
+        if t.text == "cases":
+            self.take()
+            e = self.parse_expr(lvl_params, bvar_stack)
+            return ("cases", e, list(bvar_stack))
         if t.text == "intro":
             self.take()
             name_tok = self.take()

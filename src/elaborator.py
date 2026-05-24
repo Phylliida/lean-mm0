@@ -838,6 +838,87 @@ class Elaborator:
                          if self.mctx.get(m) is None]
             return e_elab, remaining
 
+        if kind == "cases":
+            _, expr, _bvar_stack = tac
+            expr_r = _resolve_bvars(expr, ctx)
+            scrut_e, scrut_ty = self.elab(expr_r, None, ctx)
+            scrut_ty_w = self.kernel.whnf(
+                self.mctx.instantiate(scrut_ty), ctx)
+            head, ind_args = _spine(scrut_ty_w)
+            if not isinstance(head, Const) or not self.env.has(head.name):
+                raise ElabError(
+                    f"cases: scrutinee type is not an inductive: "
+                    f"{show_expr(scrut_ty_w)}")
+            decl = self.env.get(head.name)
+            if not isinstance(decl, Inductive):
+                raise ElabError(
+                    f"cases: {head.name} is not an inductive")
+            rec_decl = self.env.get(decl.recursor_name)
+            for rule in rec_decl.rules:
+                if rule.rec_arg_positions:
+                    raise ElabError(
+                        f"cases: recursive ctor {rule.ctor_name} not "
+                        f"yet supported (v1)")
+            if decl.num_indices > 0:
+                raise ElabError(
+                    f"cases: indexed inductive {head.name} not yet "
+                    f"supported (v1)")
+            n_params = decl.num_params
+            param_args = ind_args[:n_params]
+            ind_lvls = head.levels
+            G = self.mctx.instantiate(goal)
+            ind_applied = Const(decl.name, ind_lvls)
+            for pa in param_args:
+                ind_applied = App(ind_applied, pa)
+            motive = Lam("_", ind_applied, shift(G, 1))
+            G_ty_w = self.kernel.whnf(
+                self.mctx.instantiate(self._infer_elaborated(G, ctx)),
+                ctx)
+            if not isinstance(G_ty_w, Sort):
+                raise ElabError(
+                    f"cases: goal's type isn't a Sort: "
+                    f"{show_expr(G_ty_w)}")
+            v_level = G_ty_w.level
+            ctx_snap = tuple(ctx.entries)
+            minors = []
+            subgoals_out: list = []
+            for ctor_name in decl.constructor_names:
+                cd = self.env.get(ctor_name)
+                ct = inst_levels(cd.type_, cd.level_params, ind_lvls)
+                for pa in param_args:
+                    if not isinstance(ct, Pi):
+                        raise ElabError(
+                            f"cases: bad ctor type for {ctor_name}")
+                    ct = subst_bvar(ct.body, 0, pa)
+                field_types = []
+                for _ in range(cd.num_fields):
+                    if not isinstance(ct, Pi):
+                        raise ElabError(
+                            f"cases: bad ctor type for {ctor_name}")
+                    field_types.append(ct.dom)
+                    ct = ct.body
+                minor_ty = shift(G, cd.num_fields)
+                for j in reversed(range(cd.num_fields)):
+                    minor_ty = Pi(f"f{j}", field_types[j], minor_ty)
+                m = self.mctx.fresh(minor_ty)
+                minors.append(m)
+                subgoals_out.append((m.id, ctx_snap))
+            rec_lvls: list = []
+            for lp_name in rec_decl.level_params:
+                if lp_name == rec_decl.motive_universe_param:
+                    rec_lvls.append(v_level)
+                else:
+                    idx = decl.level_params.index(lp_name)
+                    rec_lvls.append(ind_lvls[idx])
+            rec_term: Expr = Const(rec_decl.name, tuple(rec_lvls))
+            for pa in param_args:
+                rec_term = App(rec_term, pa)
+            rec_term = App(rec_term, motive)
+            for m in minors:
+                rec_term = App(rec_term, m)
+            rec_term = App(rec_term, scrut_e)
+            return rec_term, subgoals_out
+
         if kind == "rewrite":
             _, expr, _bvar_stack = tac
             expr_r = _resolve_bvars(expr, ctx)
