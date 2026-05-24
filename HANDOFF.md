@@ -11,10 +11,10 @@ trust boundary.
 
 | | |
 |---|---|
-| Tests | **99 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 32 parser examples) |
-| Total source | ~6.4 kLoC Python + 188 LoC MM0 prelude + 1189 LoC `.lean` examples |
+| Tests | **100 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 33 parser examples) |
+| Total source | ~6.4 kLoC Python + 188 LoC MM0 prelude + 1233 LoC `.lean` examples |
 | Trusted base | `src/mm0_verify.py` (669 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 27 commits on `master`; clean working tree |
+| Repo | 29 commits on `master`; clean working tree |
 
 ## What the pipeline does
 
@@ -208,6 +208,8 @@ f38d618  Decidable composition: And/Or/Not instances
 2492f59  HANDOFF for Decidable compose
 9c2310c  Nat building blocks: nat_no_confuse, succ_ne_zero, succ_inj
 9071956  Nat.decEq via Nat.rec with Π-typed motive
+e86a85f  HANDOFF for nat_inj + Nat.decEq
+a96a3b1  Bool.decEq with no-confusion helpers
 ```
 
 ### `383b984` — initial commit
@@ -293,6 +295,12 @@ The skeleton with everything that works:
   inst slot would dangle)
 - New example `decidable.lean` (7 examples; includes nested ite, a
   `def choose` taking an explicit `Decidable c`, both branches verified)
+
+### `a96a3b1` — Bool.decEq
+
+Decidable equality on Bool: finite (4 cases), so no recursion is
+needed.  Adds `bool_no_confuse`, `true_ne_false`, `false_ne_true` as
+helpers and uses nested dependent matches on both args.
 
 ### `9071956` — Nat.decEq
 
@@ -564,10 +572,9 @@ Pieces ordered by impact and tractability:
    (rewrite using an equation database), `revert` (the inverse of
    `intro`), `cases` (eliminate an inductive hypothesis).
 
-3. **More Decidable instances** — `And` / `Or` / `Not` are done
-   (`decidable_compose.lean`); `Nat.decEq` is done (`nat_dec_eq.lean`).
-   Next: `Bool.decEq` (easy), `List.decEq` (recursion + IH), `Decidable
-   (Nat.le a b)` (would need a Nat.lt decision).
+3. **More Decidable instances** — `And` / `Or` / `Not` (`decidable_compose.lean`),
+   `Nat.decEq` (`nat_dec_eq.lean`) and `Bool.decEq` (`bool_dec_eq.lean`) are
+   done.  Next: `List.decEq` (recursion + IH), `Decidable (Nat.le a b)`.
 
 4. **Indexed-inductive match v2 (recursive ctors)** — extend the v1
    indexed match to handle `Nat.le.step`, `Vec.cons`, etc.  Needs the
