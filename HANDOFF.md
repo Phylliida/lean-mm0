@@ -11,10 +11,10 @@ trust boundary.
 
 | | |
 |---|---|
-| Tests | **101 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 34 parser examples) |
-| Total source | ~6.4 kLoC Python + 188 LoC MM0 prelude + 1266 LoC `.lean` examples |
+| Tests | **102 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 35 parser examples) |
+| Total source | ~6.4 kLoC Python + 188 LoC MM0 prelude + 1296 LoC `.lean` examples |
 | Trusted base | `src/mm0_verify.py` (669 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 30 commits on `master`; clean working tree |
+| Repo | 32 commits on `master`; clean working tree |
 
 ## What the pipeline does
 
@@ -212,6 +212,8 @@ e86a85f  HANDOFF for nat_inj + Nat.decEq
 a96a3b1  Bool.decEq with no-confusion helpers
 a0db3b8  HANDOFF for Bool.decEq
 f236ace  Bool theory: not/and/or + not_not lemma
+b05c35c  HANDOFF for bool_ops
+27e631b  Nat.le lemmas: le_refl, le_trans
 ```
 
 ### `383b984` — initial commit
@@ -623,6 +625,13 @@ Pieces ordered by impact and tractability:
   `ELAB_DEBUG=1` / `ELAB_DEBUG2=1` environment variables for verbose
   elaboration traces (instrumentation is currently removed but trivial
   to re-add at the `unify` and `elab` boundaries).
+
+- The emitter's name mangler converts dots to underscores when producing
+  MM0 symbols, so a def named `Foo.bar_baz` collides with a constructor
+  `Foo.bar.baz` (both emit `econst-Foo_bar_baz`).  The collision causes
+  the verifier to loop on a self-referential definition.  Pick names
+  that don't have this clash, or fix the mangler in `src/emitter.py`
+  (untrusted, so safe to touch).
 
 - The MM0 verifier's normalisation handles β, δ (via `def`), ζ, ι (via
   `iota` declarations), and level normalisation — all transitively.
