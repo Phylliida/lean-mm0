@@ -157,6 +157,10 @@ def test_parse_and_verify_nat_inj():
     _run_example("nat_inj.lean")
 
 
+def test_parse_and_verify_nat_dec_eq():
+    _run_example("nat_inj.lean", "nat_dec_eq.lean")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in list(globals().items()) if k.startswith("test_")]
     passed = failed = 0
