@@ -11,10 +11,10 @@ trust boundary.
 
 | | |
 |---|---|
-| Tests | **92 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 25 parser examples) |
-| Total source | ~6.2 kLoC Python + 188 LoC MM0 prelude + 841 LoC `.lean` examples |
+| Tests | **93 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 26 parser examples) |
+| Total source | ~6.3 kLoC Python + 188 LoC MM0 prelude + 875 LoC `.lean` examples |
 | Trusted base | `src/mm0_verify.py` (669 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 13 commits on `master`; clean working tree |
+| Repo | 14 commits on `master`; clean working tree |
 
 ## What the pipeline does
 
@@ -151,10 +151,10 @@ What the parser accepts and the elaborator handles:
 |---|---|
 | `exact e` | elaborate `e` against the goal |
 | `rfl` | if goal is `Eq α a b` with `a ≡ b`, produce `Eq.refl α a` |
-| `intro x` | standalone tactic; seq peels a Π off the goal and pushes `x` as an FVar.  Trailing tactics see `x` |
-| `apply f` | elaborate `f`, peel its Π binders as fresh metas, unify the return type with the goal; explicit metas the unifier didn't pin become subgoals |
+| `intro x` | standalone; the seq interpreter peels a Π off the currently-focused goal (main goal, or a subgoal after focus shifts) and pushes `x` |
+| `apply f` | elaborate `f`, peel its Π binders as fresh metas, unify the return type with the goal; explicit metas the unifier didn't pin become subgoals (each carrying a ctx snapshot from creation) |
 | `assumption` | succeed if some local hypothesis (innermost-first) is def-equal to the goal |
-| `t1; t2; ...` | seq — consumes leading `intro`s, then runs the first body tactic, then drains its subgoals with the rest.  Lams get wrapped at the end |
+| `t1; t2; ...` | seq — focused-goal semantics: each tactic acts on the current focused goal.  Main intros are deferred until the very end so subgoal solutions can reference them as FVars; subgoal-local intros are wrapped into Lams immediately |
 
 ## Trust boundary detail
 
@@ -193,6 +193,8 @@ e579ba5  apply + assumption tactics; subgoal-aware seq
 376402e  Real fix: intro is standalone; seq threads context through
 1f53363  HANDOFF for intro/seq refactor
 c05c399  (motive := M) annotation for dependent match
+bcc9dc8  HANDOFF for dependent match
+cbb4c96  Mid-seq intros via contextful subgoals
 ```
 
 ### `383b984` — initial commit
@@ -278,6 +280,27 @@ The skeleton with everything that works:
   inst slot would dangle)
 - New example `decidable.lean` (7 examples; includes nested ite, a
   `def choose` taking an explicit `Decidable c`, both branches verified)
+
+### `cbb4c96` — mid-seq intros via contextful subgoals
+
+Subgoals from `apply` now carry a tuple `(meta_id, ctx_snap)` where
+`ctx_snap = tuple(ctx.entries)` was taken at apply-time.  The seq
+interpreter has a *focused goal* (main initially, then each subgoal
+in turn): each tactic acts on it.  `intro` peels the focused goal's
+Π and pushes an FVar.  When focus shifts to a subgoal, ctx is
+restored to the subgoal's snapshot.
+
+The subtlety: the main goal's intros are deferred.  Pushed onto ctx
+on entry, but NOT wrapped into Lams until the very end of the seq —
+that way subgoal-solving terms can reference them as FVars, and one
+final `close` walk at the end converts all of them to BVars
+consistently.  Subgoal-local intros (from a mid-seq intro inside
+subgoal drain) are wrapped immediately, because their meta's type IS
+the Π that intro peeled.
+
+`mid_seq.lean` exercises `apply f; intro k; exact k` (HO subgoal),
+main-intro + subgoal-local intro combined (`constish`), and chained
+intros into a nested subgoal (`deeper`).
 
 ### `c05c399` — dependent match motive
 
@@ -433,14 +456,7 @@ up" below.
 
 Pieces ordered by impact and tractability:
 
-1. **Mid-seq intro / per-subgoal intros** — `_run_seq` only handles
-   LEADING intros.  `apply f; intro h; ...` (intro addressing a
-   Pi-typed subgoal of `apply f`) doesn't yet work; intro outside the
-   leading position currently errors.  The natural fix is contextful
-   subgoals (each subgoal carries a snapshot of its ctx) so an intro
-   inside the subgoal-drain phase can peel that subgoal's Pi.
-
-2. **Match on indexed inductives** — currently `match` errors on
+1. **Match on indexed inductives** — currently `match` errors on
    inductives with `num_indices > 0` (e.g. Vec, Eq, Nat.le).  Even with
    `(motive := M)` we don't yet support this.  The recursor's signature
    includes the indices, which need to be inferred from the scrutinee's
