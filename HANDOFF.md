@@ -11,10 +11,10 @@ trust boundary.
 
 | | |
 |---|---|
-| Tests | **95 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 28 parser examples) |
-| Total source | ~6.3 kLoC Python + 188 LoC MM0 prelude + 1008 LoC `.lean` examples |
+| Tests | **96 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 29 parser examples) |
+| Total source | ~6.4 kLoC Python + 188 LoC MM0 prelude + 1028 LoC `.lean` examples |
 | Trusted base | `src/mm0_verify.py` (669 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 18 commits on `master`; clean working tree |
+| Repo | 19 commits on `master`; clean working tree |
 
 ## What the pipeline does
 
@@ -154,6 +154,7 @@ What the parser accepts and the elaborator handles:
 | `intro x` | standalone; the seq interpreter peels a Π off the currently-focused goal (main goal, or a subgoal after focus shifts) and pushes `x` |
 | `apply f` | elaborate `f`, peel its Π binders as fresh metas, unify the return type with the goal; explicit metas the unifier didn't pin become subgoals (each carrying a ctx snapshot from creation) |
 | `assumption` | succeed if some local hypothesis (innermost-first) is def-equal to the goal |
+| `rewrite h` / `rw h` | h : Eq α a b — replaces all syntactic occurrences of `a` in the goal with `b`; leaves the rewritten goal as a subgoal |
 | `t1; t2; ...` | seq — focused-goal semantics: each tactic acts on the current focused goal.  Main intros are deferred until the very end so subgoal solutions can reference them as FVars; subgoal-local intros are wrapped into Lams immediately |
 
 ## Trust boundary detail
@@ -199,6 +200,8 @@ cbb4c96  Mid-seq intros via contextful subgoals
 6ffe236  Indexed-inductive match v1 (non-recursive ctors)
 1c7635b  HANDOFF for indexed-inductive match v1
 474b45b  Nat lemmas: add_zero/mul_zero/mul_one/add_assoc/zero_mul/one_mul
+1ca6361  HANDOFF for Nat lemmas
+5380a78  rewrite tactic (rw alias)
 ```
 
 ### `383b984` — initial commit
@@ -284,6 +287,27 @@ The skeleton with everything that works:
   inst slot would dangle)
 - New example `decidable.lean` (7 examples; includes nested ite, a
   `def choose` taking an explicit `Decidable c`, both branches verified)
+
+### `5380a78` — rewrite tactic
+
+`rewrite h` (or `rw h`) where `h : Eq α a b` replaces every
+structural occurrence of `a` in the goal with `b`, leaving the
+rewritten goal as a subgoal.
+
+The built term is
+```
+@Eq.rec.{u, v} α b
+  (fun (a' : α) (_hp : Eq α b a') => goal[a := a'])
+  ?new_subgoal
+  a (Eq.symm h)
+```
+where `v` is taken from the goal's type (inferred as `Sort v`).
+
+A new module-level `_replace_term` does structural substitution with
+proper BVar shifting when descending into binders.
+
+`rewrite.lean`: rewrite + `apply Eq.refl` for symmetry, and a multi-
+position rewrite in a Prod equality.
 
 ### `474b45b` — Nat lemmas
 
@@ -496,9 +520,9 @@ Pieces ordered by impact and tractability:
    `mul_comm`, `mul_assoc`, `left_distrib`, `right_distrib` are next.
    Each is ~1-2 pages of induction + rewrite, no engine changes.
 
-2. **More tactics** — `rewrite` (instantiate `Eq.mpr` / `Eq.rec` with
-   HOP motive), `simp` (rewrite using an equation database), `revert`
-   (the inverse of `intro`).
+2. **More tactics** — `rewrite` is in (`5380a78`); next are `simp`
+   (rewrite using an equation database), `revert` (the inverse of
+   `intro`), `cases` (eliminate an inductive hypothesis).
 
 3. **More Decidable instances** — `Decidable (Eq.{1} Nat a b)` via
    `Nat.beq`, `Decidable.And`, `Decidable.Or`, `Decidable.Not`.  Once
