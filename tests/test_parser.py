@@ -195,6 +195,11 @@ def test_parse_and_verify_revert():
     _run_example("math.lean", "nat_lemmas.lean", "revert.lean")
 
 
+def test_parse_and_verify_list_dec_eq():
+    # Uses Nat.decEq from nat_dec_eq.lean (which itself needs nat_inj.lean).
+    _run_example("nat_inj.lean", "nat_dec_eq.lean", "list_dec_eq.lean")
+
+
 def test_parse_and_verify_nat_mul():
     _run_example("math.lean", "nat_lemmas.lean", "nat_mul.lean")
 

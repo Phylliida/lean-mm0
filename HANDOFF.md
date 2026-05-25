@@ -11,10 +11,10 @@ trust boundary.
 
 | | |
 |---|---|
-| Tests | **109 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 42 parser examples) |
-| Total source | ~6.8 kLoC Python + 188 LoC MM0 prelude + 1903 LoC `.lean` examples (42 files) |
+| Tests | **110 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 43 parser examples) |
+| Total source | ~6.8 kLoC Python + 188 LoC MM0 prelude + 2128 LoC `.lean` examples (43 files) |
 | Trusted base | `src/mm0_verify.py` (710 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 52+ commits on `master`; clean working tree |
+| Repo | 53+ commits on `master`; clean working tree |
 
 ## What the pipeline does
 
@@ -241,7 +241,8 @@ b60b6b2  HANDOFF: opaque-def + Theorem + Nat mul algebra
 e81603d  Defer subgoal-local intro wraps (real fix)
 235fa48  Nat.le ordering lemmas (zero_le, le_succ, succ_le_succ, le_of_lt, …)
 7809323  cases + induction on indexed inductives (FVar-index restriction)
-(next)   revert tactic + add_comm via revert+induction
+af21325  revert tactic + add_comm via revert+induction
+(next)   List.decEq for List Nat + no-confusion helpers
 ```
 
 ### `383b984` — initial commit
@@ -629,8 +630,10 @@ Pieces ordered by impact and tractability:
    for `induction` on indexed inductives with concrete indices.
 
 3. **More Decidable instances** — `And` / `Or` / `Not` (`decidable_compose.lean`),
-   `Nat.decEq` (`nat_dec_eq.lean`) and `Bool.decEq` (`bool_dec_eq.lean`) are
-   done.  Next: `List.decEq` (recursion + IH), `Decidable (Nat.le a b)`.
+   `Nat.decEq` (`nat_dec_eq.lean`), `Bool.decEq` (`bool_dec_eq.lean`), and
+   `List.decEq` for `List Nat` (`list_dec_eq.lean`) are done.  Open: a
+   polymorphic `List.decEq` parameterised over an element-wise decidable
+   equality, and `Decidable (Nat.le a b)`.
 
 4. **Indexed-inductive match v2 (recursive ctors)** — extend the v1
    indexed match to handle `Nat.le.step`, `Vec.cons`, etc.  Needs the
