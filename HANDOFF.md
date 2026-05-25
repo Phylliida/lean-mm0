@@ -11,10 +11,10 @@ trust boundary.
 
 | | |
 |---|---|
-| Tests | **104 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 37 parser examples) |
-| Total source | ~6.5 kLoC Python + 188 LoC MM0 prelude + 1337 LoC `.lean` examples (37 files) |
-| Trusted base | `src/mm0_verify.py` (669 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 43 commits on `master`; clean working tree |
+| Tests | **105 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 38 parser examples) |
+| Total source | ~6.6 kLoC Python + 188 LoC MM0 prelude + 1531 LoC `.lean` examples (38 files) |
+| Trusted base | `src/mm0_verify.py` (710 LoC) + `prelude/cic.mm0` (188 LoC) |
+| Repo | 46+ commits on `master`; clean working tree |
 
 ## What the pipeline does
 
@@ -102,7 +102,7 @@ What the parser accepts and the elaborator handles:
 | Form | Example | File |
 |---|---|---|
 | `def NAME .{lvls} (binders) : T := e` | `def id_poly.{u} {a : Sort u} (x : a) : a := x` | most |
-| `theorem` (same shape, treated identically) | `theorem foo : T := proof` | math.lean |
+| `theorem` (same shape as def but emitted as MM0 `opaque-def` — body verified once, not δ-unfolded at use sites; essential for non-trivial proof chains) | `theorem mul_comm (m n : Nat) : ... := ...` | nat_mul.lean |
 | `axiom NAME : T` | `axiom Foo : Bar` | typeclass.lean |
 | `example : T := proof` (anonymous theorem) | `example : Eq.{1} Nat 6 6 := Eq.refl _ _` | math.lean |
 | `instance NAME : T := e` (registers in synth db) | `instance addNat : Add.{1} Nat := ...` | arith.lean |
@@ -160,14 +160,19 @@ What the parser accepts and the elaborator handles:
 
 ## Trust boundary detail
 
-**Trusted (~857 LoC total):**
+**Trusted (~898 LoC total):**
 
-1. `src/mm0_verify.py` (669 LoC).  Parses an s-expression dialect of MM0
-   (sorts, term ctors, defs, builtins, axioms, theorems, iota rules).
-   Verifies forward proofs by substituting the proof's term arguments
-   into an axiom/theorem's hypotheses + conclusion, normalising the
-   result (βδιζ + level laws + a few builtins like `subst1`/`shift`),
-   and comparing.  Iota rules drive recursor reduction.
+1. `src/mm0_verify.py` (710 LoC).  Parses an s-expression dialect of MM0
+   (sorts, term ctors, defs, opaque-defs, builtins, axioms, theorems,
+   iota rules).  Verifies forward proofs by substituting the proof's
+   term arguments into an axiom/theorem's hypotheses + conclusion,
+   normalising the result (βδιζ + level laws + a few builtins like
+   `subst1`/`shift`), and comparing.  Iota rules drive recursor
+   reduction.  `opaque-def` is like `def` but its body is *not*
+   exposed for δ-expansion; the dedicated `opaque-def-typing` proof
+   rule lifts a typing-of-body derivation to a typing-of-name claim,
+   so the body is still checked once at definition time without being
+   re-normalised at every call site.
 
 2. `prelude/cic.mm0` (188 LoC).  Declares the syntactic categories
    (`expr`, `lvl`, `ctx`, `name`) and the inference rules of CIC as
@@ -179,7 +184,7 @@ accept something false — only reject something true.
 
 ## What's been built (chronological)
 
-43 commits — feature commits + HANDOFF updates interleaved:
+46 commits — feature commits + HANDOFF updates interleaved:
 
 ```
 383b984  Initial commit: lean-mm0 prototype
@@ -225,6 +230,9 @@ f5e54a4  HANDOFF for emitter fix
 bcfcd73  cases extended to recursive ctors (v2)
 bef1c56  HANDOFF for cases v2
 0c5cec8  cases: document v1 limitation (non-dependent motive only)
+1fd1d0b  HANDOFF refresh
+ba6b135  Theorem class + opaque-def in verifier; rewrite β-normalises goal
+5ab3f07  Nat mul algebra (succ_mul, mul_comm, left_distrib, mul_assoc, right_distrib)
 ```
 
 ### `383b984` — initial commit
@@ -595,10 +603,12 @@ up" below.
 
 Pieces ordered by impact and tractability:
 
-1. **`Nat.mul_comm` and friends** — `add_assoc`, `mul_one`, `zero_mul`,
-   `one_mul`, `mul_zero`, `add_zero` are done (`nat_lemmas.lean`).
-   `mul_comm`, `mul_assoc`, `left_distrib`, `right_distrib` are next.
-   Each is ~1-2 pages of induction + rewrite, no engine changes.
+1. **More Nat algebra** — `add_zero`, `mul_zero`, `mul_one`, `add_assoc`,
+   `zero_mul`, `one_mul` (`nat_lemmas.lean`) and `succ_mul`, `mul_comm`,
+   `left_distrib`, `mul_assoc`, `right_distrib`, `add_left_comm`
+   (`nat_mul.lean`) are done.  Open: `Nat.le` ordering lemmas (transitivity
+   already in `nat_le.lean`; add `le_succ`, `succ_le_succ`, `lt_irrefl`,
+   `le_antisymm`).  Integer arithmetic if the prelude grows Int proofs.
 
 2. **More tactics** — `rewrite` (`5380a78`) and `cases` v1+v2 (`282e66d`,
    `bcfcd73`) are in.  Next: `simp` (rewrite using an equation database),
@@ -664,6 +674,25 @@ Pieces ordered by impact and tractability:
   `iota` declarations), and level normalisation — all transitively.
   When debugging "verifier rejects", normalize the failed term to see
   what it actually reduces to.
+
+- **`theorem` vs `def`.**  Anything written `def f := ...` is δ-reducible
+  everywhere (the kernel and the verifier will unfold it).  Anything
+  written `theorem f := ...` is **opaque**: the kernel/verifier never
+  unfold its body at a use site; only its declared type is observable.
+  This is essential for non-trivial proof chains — without it, every
+  subsequent lemma re-normalises the entire chain of dependencies and
+  verification cost grows super-linearly (mul_comm alone went from >25 min
+  to ~5 s when its dependencies were switched to `theorem`).
+  Implementation: kernel `whnf` ignores `Theorem` decls (only `Definition`
+  is δ-reduced); the emitter writes `theorem` declarations as MM0
+  `opaque-def` and wraps their typing proof with the verifier's new
+  `opaque-def-typing` rule, which checks the body matches the opaque-def's
+  stored body before lifting the typing claim from `body` to the name.
+
+- **The `rewrite` tactic's goal is β-normalised** before structural
+  search, so it works inside recursor minors where the goal looks like
+  `(λk. motive k) (ctor args)` (an unreduced β-redex).  See `_beta_norm`
+  in `elaborator.py`.
 
 ## Caveat
 
