@@ -181,6 +181,12 @@ def test_parse_and_verify_nat_lt():
     _run_example("nat_le.lean", "nat_lt.lean")
 
 
+def test_parse_and_verify_nat_mul():
+    _run_example("math.lean", "nat_lemmas.lean", "nat_mul.lean")
+
+
+
+
 if __name__ == "__main__":
     tests = [v for k, v in list(globals().items()) if k.startswith("test_")]
     passed = failed = 0
