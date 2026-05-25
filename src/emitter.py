@@ -24,7 +24,7 @@ from .expr import (
     open_, close, inst_levels,
 )
 from .env import (
-    Env, Definition, Axiom, Constructor, Recursor, Inductive, RecursorRule,
+    Env, Definition, Theorem, Axiom, Constructor, Recursor, Inductive, RecursorRule,
 )
 from .kernel import Kernel, LocalCtx, Deriv, EqDeriv
 from .mm0_verify import SExpr
@@ -388,11 +388,17 @@ def emit_decl(decl, env: Env, out: io.StringIO) -> None:
 
     # 1) declare the constant.
     #    Definitions become MM0 `def`s so the verifier δ-expands them.
+    #    Theorems become MM0 `opaque-def`s — body is parsed and stored, but
+    #    not unfolded during normalization (subsequent proofs treat them as
+    #    opaque, which is what keeps chains of dependent lemmas cheap).
     #    Primitives (axioms, inductive type-formers, constructors, recursors)
     #    become opaque `term`s.
     if isinstance(decl, Definition):
         val_enc = encode_closed(decl.value)
         out.write(f"(def {encode_name(name)} () expr {_sexp_str(val_enc)})\n")
+    elif isinstance(decl, Theorem):
+        val_enc = encode_closed(decl.value)
+        out.write(f"(opaque-def {encode_name(name)} () expr {_sexp_str(val_enc)})\n")
     else:
         out.write(f"(term {encode_name(name)} () expr)\n")
 
@@ -403,8 +409,8 @@ def emit_decl(decl, env: Env, out: io.StringIO) -> None:
     def fmt_vars():
         return "(" + " ".join("(" + " ".join(v) + ")" for v in vars_spec) + ")"
     concl = ["has-type", "G", encode_name(name), type_enc]
-    # for definitions we provide a proof; otherwise axiom
-    if isinstance(decl, Definition):
+    # for definitions / theorems we provide a proof; otherwise axiom
+    if isinstance(decl, (Definition, Theorem)):
         # type-check the body, capture derivation
         ker = Kernel(env, record=True)
         # add the decl temporarily? It's already in env (build_stdlib added it)
@@ -416,35 +422,29 @@ def emit_decl(decl, env: Env, out: io.StringIO) -> None:
         body_proof = emit_typing_proof(d, ctx0, env)
         # the body proof concludes (has-type cnil <value> <type>) (or close to it).
         # We want a theorem of (has-type G econst-name <type>).
-        # Path: use the body proof + de-conv with delta-rule to swap
-        # econst-name for <value> on the term side.  We need a flipped rule:
-        # if has-type cnil value T and def-eq cnil value econst-name, conclude
-        # has-type cnil econst-name T.  Our prelude doesn't have such a rule
-        # on the *term* side directly (ht-conv only converts the type).
-        # We add ht-conv-term in the prelude.
-        # For now, take a simpler path: emit the theorem as a δ-axiom
-        # asserting econst-name : <type>, AND assert the δ-rule.
-        # Then the body proof becomes a *separate* theorem proving the body
-        # is well-typed (used as a witness that the δ-axiom is sound).
-        # Definition: register the typing as a *theorem* whose proof shows
-        # the body has the declared type.  Under δ, econst-name reduces to
-        # the body, so this proof simultaneously witnesses
-        #   (has-type G econst-name <type>).
+        # For Definition: econst-name δ-reduces to <value>, so the body proof
+        # already witnesses (has-type cnil econst-name T) up to def-eq.
+        # For Theorem: econst-name is opaque, so we lift via the verifier's
+        # opaque-def-typing rule before weakening.
         try:
-            proof_str = _sexp_str(body_proof)
             out.write(f"(theorem {encode_typing_name(name)}\n")
             out.write(f"  {fmt_vars()}\n")
             out.write(f"  ()\n")
             out.write(f"  {_sexp_str(concl)}\n")
-            # The proof was constructed under cnil; lift to arbitrary G
-            # via ht-weak-closed.  But here `econst-name` is a def, so the
-            # body's typing IS the def's typing after δ.  Wrap accordingly.
-            wrapped = ["apply", "ht-weak-closed",
-                       ["G", encode_name(name), type_enc],
-                       [body_proof]]
-            # Special case: when there are no level params and G is the
-            # only var, `ht-weak-closed`'s first arg is just "G".  That's
-            # already what we built.
+            if isinstance(decl, Theorem):
+                # opaque-def-typing wraps a body-proof into a typing-of-name
+                # proof, then ht-weak-closed lifts from cnil to arbitrary G.
+                lifted = ["opaque-def-typing", encode_name(name), body_proof]
+                wrapped = ["apply", "ht-weak-closed",
+                           ["G", encode_name(name), type_enc],
+                           [lifted]]
+            else:
+                # The proof was constructed under cnil; lift to arbitrary G
+                # via ht-weak-closed.  econst-name is a def, so the body's
+                # typing IS the def's typing after δ.
+                wrapped = ["apply", "ht-weak-closed",
+                           ["G", encode_name(name), type_enc],
+                           [body_proof]]
             out.write(f"  {_sexp_str(wrapped)})\n")
         except Exception as e:
             # fallback: emit as axiom and note the failure

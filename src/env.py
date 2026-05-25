@@ -22,6 +22,19 @@ class Definition:
 
 
 @dataclass(frozen=True)
+class Theorem:
+    """A proven proposition.  Structurally identical to Definition (we keep
+    the body so the kernel/elaborator can type-check it), but the kernel
+    treats it as opaque: `whnf` does not δ-unfold it.  The emitter emits it
+    as an MM0 `opaque-def`, so the verifier does not unfold it either,
+    keeping subsequent proofs' verification cheap."""
+    name: str
+    level_params: Tuple[str, ...]
+    type_: Expr
+    value: Expr
+
+
+@dataclass(frozen=True)
 class Axiom:
     name: str
     level_params: Tuple[str, ...]
@@ -83,7 +96,7 @@ class Inductive:
     recursor_name: str
 
 
-Decl = "Definition | Axiom | Constructor | Recursor | Inductive"
+Decl = "Definition | Theorem | Axiom | Constructor | Recursor | Inductive"
 
 
 class Env:

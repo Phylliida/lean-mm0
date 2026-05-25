@@ -31,9 +31,9 @@ from .levels import (
 )
 from .expr import (
     Expr, Sort, BVar, FVar, Const, App, Lam, Pi, Let, Meta, Explicit, By,
-    shift, subst_bvar, open_, close, inst_levels, show as show_expr,
+    shift, subst_bvar, open_, close, inst_levels, beta, show as show_expr,
 )
-from .env import Env, Definition, Axiom, Constructor, Recursor, Inductive
+from .env import Env, Definition, Theorem, Axiom, Constructor, Recursor, Inductive
 from .kernel import Kernel, LocalCtx, TypeError_
 
 
@@ -144,6 +144,34 @@ class MetaContext:
             raise ElabError(
                 f"unsolved metavariables in {show_expr(out)}: " + "; ".join(parts))
         return out
+
+
+def _beta_norm(e: Expr) -> Expr:
+    """Beta-only normalisation: reduce every `(λx. body) arg` redex
+    recursively, without doing δ (definition unfolding) or ι (recursor
+    reduction).  Used to expose the real shape of a goal that came out of
+    a recursor minor — those goals look like `(λk. motive k) (ctor args)`
+    and the `rewrite` tactic's structural search can't see through the
+    application until it's been β-reduced."""
+    if isinstance(e, (Sort, BVar, FVar, Const, Meta, By)):
+        return e
+    if isinstance(e, Explicit):
+        return Explicit(_beta_norm(e.inner))
+    if isinstance(e, App):
+        fn = _beta_norm(e.fn)
+        arg = _beta_norm(e.arg)
+        if isinstance(fn, Lam):
+            return _beta_norm(beta(fn.body, arg))
+        return App(fn, arg)
+    if isinstance(e, Lam):
+        return Lam(e.binder, _beta_norm(e.dom), _beta_norm(e.body))
+    if isinstance(e, Pi):
+        return Pi(e.binder, _beta_norm(e.dom), _beta_norm(e.body),
+                  e.implicit, e.inst_implicit)
+    if isinstance(e, Let):
+        return Let(e.binder, _beta_norm(e.type_),
+                   _beta_norm(e.value), _beta_norm(e.body))
+    return e
 
 
 def _replace_term(e: Expr, target: Expr, replacement: Expr) -> Tuple[Expr, bool]:
@@ -946,7 +974,10 @@ class Elaborator:
                     f"got {show_expr(h_ty_w)}")
             α, a, b = args
             u_level = head.levels[0]
-            G = self.mctx.instantiate(goal)
+            # β-normalise the goal so motive-applications coming out of a
+            # recursor minor (shape: `(λk. P k) (ctor args)`) become the
+            # literal `P[ctor args / k]` that structural search can scan.
+            G = _beta_norm(self.mctx.instantiate(goal))
             # Determine v from the goal's type — the motive's body IS the
             # goal (modulo the abstraction), so its level is the goal's.
             G_ty_w = self.kernel.whnf(
@@ -1337,6 +1368,13 @@ def elaborate_decl(env: Env, kind: str, name: str = None,
     elab = Elaborator(env)
     body_e, body_ty = elab.elab(body, ty_elab, LocalCtx())
     body_e = elab.mctx.instantiate_fully(body_e)
+    if kind == "theorem":
+        # `example` becomes "theorem" in the parser; both produce a Theorem
+        # decl, which the kernel and emitter treat as opaque (no δ-unfold).
+        ker.add_theorem(Theorem(
+            name=name, level_params=level_params,
+            type_=ty_elab, value=body_e))
+        return
     ker.add_definition(Definition(
         name=name, level_params=level_params,
         type_=ty_elab, value=body_e))

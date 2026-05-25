@@ -126,6 +126,20 @@ class DefDecl:
 
 
 @dataclass
+class OpaqueDefDecl:
+    """Like DefDecl, but the body is NOT exposed for δ-reduction during
+    normalization.  The body is kept so the (opaque-def-typing NAME PROOF)
+    rule can check that a body-of-NAME typing derivation matches.  Used
+    for lemma proofs that we want to verify but not unfold at every call
+    site — without this distinction, every subsequent lemma re-normalises
+    the entire chain of dependent proofs, which is exponentially bad."""
+    name: str
+    args: List[Tuple[str, str]]
+    result_sort: str
+    body: SExpr
+
+
+@dataclass
 class BuiltinDecl:
     name: str
     args: List[Tuple[str, str]]
@@ -190,6 +204,7 @@ class VerifierEnv:
     sorts: Dict[str, None] = field(default_factory=dict)
     terms: Dict[str, TermDecl] = field(default_factory=dict)
     defs: Dict[str, DefDecl] = field(default_factory=dict)
+    opaque_defs: Dict[str, OpaqueDefDecl] = field(default_factory=dict)
     builtins: Dict[str, BuiltinDecl] = field(default_factory=dict)
     axioms: Dict[str, AxiomDecl] = field(default_factory=dict)
     theorems: Dict[str, TheoremDecl] = field(default_factory=dict)
@@ -527,6 +542,10 @@ def add_decl(env: VerifierEnv, decl: SExpr) -> None:
         _, name, args, result_sort, body = decl
         arg_pairs = [(a[0], a[1]) for a in args]
         env.defs[name] = DefDecl(name, arg_pairs, result_sort, body)
+    elif head == "opaque-def":
+        _, name, args, result_sort, body = decl
+        arg_pairs = [(a[0], a[1]) for a in args]
+        env.opaque_defs[name] = OpaqueDefDecl(name, arg_pairs, result_sort, body)
     elif head == "builtin":
         _, name, args, result_sort = decl
         arg_pairs = [(a[0], a[1]) for a in args]
@@ -614,6 +633,28 @@ def _check_proof(env: VerifierEnv, proof: SExpr,
         if idx < 0 or idx >= len(hyps):
             raise VerifyError(f"hyp index out of range: {idx}")
         return hyps[idx]
+    if head == "opaque-def-typing":
+        # (opaque-def-typing OPAQUE-NAME BODY-PROOF)
+        # BODY-PROOF must conclude (has-type G <body> T) where <body> is the
+        # opaque def's stored body.  Result: (has-type G OPAQUE-NAME T).
+        _, opaque_name, body_proof = proof
+        if opaque_name not in env.opaque_defs:
+            raise VerifyError(
+                f"opaque-def-typing: {opaque_name} is not an opaque-def")
+        body_concl = _check_proof(env, body_proof, hyps, var_set)
+        if not (isinstance(body_concl, list) and len(body_concl) == 4
+                and body_concl[0] == "has-type"):
+            raise VerifyError(
+                f"opaque-def-typing: inner proof must conclude (has-type G e T), "
+                f"got {sexp_str(body_concl)}")
+        _, G, body_term, T = body_concl
+        expected_body = env.opaque_defs[opaque_name].body
+        if not _equal(body_term, expected_body, env):
+            raise VerifyError(
+                f"opaque-def-typing: inner proof's subject does not match "
+                f"opaque body.\n  expected: {sexp_str(_normalize(expected_body, env))}"
+                f"\n  got: {sexp_str(_normalize(body_term, env))}")
+        return ["has-type", G, opaque_name, T]
     if head == "apply":
         _, name, sigma_list, sub_proofs = proof
         ref = env.axioms.get(name) or env.theorems.get(name)

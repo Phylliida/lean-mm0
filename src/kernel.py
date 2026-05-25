@@ -25,7 +25,7 @@ from .expr import (
     app_many,
 )
 from .env import (
-    Env, Definition, Axiom, Constructor, Recursor, Inductive, RecursorRule,
+    Env, Definition, Theorem, Axiom, Constructor, Recursor, Inductive, RecursorRule,
 )
 
 
@@ -461,6 +461,17 @@ class Kernel:
             raise TypeError_(f"definition {d.name} has non-type type")
         deriv = self.check(d.value, d.type_, ctx)
         self.env.add(d)
+        return deriv
+
+    def add_theorem(self, t: Theorem) -> Optional[Deriv]:
+        # Same kernel work as add_definition; the difference is only that
+        # later δ-reduction skips Theorem (it's opaque).
+        ctx = LocalCtx()
+        ttype, _ = self.infer(t.type_, ctx)
+        if not isinstance(self.whnf(ttype, ctx), Sort):
+            raise TypeError_(f"theorem {t.name} has non-type type")
+        deriv = self.check(t.value, t.type_, ctx)
+        self.env.add(t)
         return deriv
 
     def add_axiom(self, a: Axiom) -> None:
