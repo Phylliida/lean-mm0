@@ -960,6 +960,137 @@ class Elaborator:
             rec_term = App(rec_term, scrut_e)
             return rec_term, subgoals_out
 
+        if kind == "induction":
+            # Like `cases`, but with a *dependent* motive: each subgoal's
+            # type is G with the scrutinee replaced by the ctor pattern,
+            # and each IH has type `motive(rec_field)` (i.e. the goal
+            # specialised at the recursive position).  This is what makes
+            # induction useful — non-dependent cases would leave the goal
+            # as the abstract `G` in every branch, useless for real proofs.
+            _, expr, _bvar_stack = tac
+            expr_r = _resolve_bvars(expr, ctx)
+            scrut_e, scrut_ty = self.elab(expr_r, None, ctx)
+            if not isinstance(scrut_e, FVar):
+                raise ElabError(
+                    f"induction: scrutinee must be a local hypothesis "
+                    f"(FVar); got {show_expr(scrut_e)}. "
+                    f"For arbitrary expressions, generalise first or use "
+                    f"`cases`.")
+            scrut_ty_w = self.kernel.whnf(
+                self.mctx.instantiate(scrut_ty), ctx)
+            head, ind_args = _spine(scrut_ty_w)
+            if not isinstance(head, Const) or not self.env.has(head.name):
+                raise ElabError(
+                    f"induction: scrutinee type is not an inductive: "
+                    f"{show_expr(scrut_ty_w)}")
+            decl = self.env.get(head.name)
+            if not isinstance(decl, Inductive):
+                raise ElabError(
+                    f"induction: {head.name} is not an inductive")
+            if decl.num_indices > 0:
+                raise ElabError(
+                    f"induction: indexed inductive {head.name} not yet "
+                    f"supported")
+            rec_decl = self.env.get(decl.recursor_name)
+            n_params = decl.num_params
+            param_args = ind_args[:n_params]
+            ind_lvls = head.levels
+            G = self.mctx.instantiate(goal)
+            ind_applied: Expr = Const(decl.name, ind_lvls)
+            for pa in param_args:
+                ind_applied = App(ind_applied, pa)
+            # Dependent motive: λ x : ind_applied. G[scrut_e := x].
+            # `close` replaces FVar(scrut) with BVar(0) and shifts the rest
+            # of the BVars in G up by one to make room for the new binder.
+            motive_body = close(G, scrut_e.name, 0)
+            motive = Lam(scrut_e.name, ind_applied, motive_body)
+            G_ty_w = self.kernel.whnf(
+                self.mctx.instantiate(self._infer_elaborated(G, ctx)),
+                ctx)
+            if not isinstance(G_ty_w, Sort):
+                raise ElabError(
+                    f"induction: goal's type isn't a Sort: "
+                    f"{show_expr(G_ty_w)}")
+            v_level = G_ty_w.level
+
+            def apply_motive(X: Expr, depth: int) -> Expr:
+                """motive_body[X / BVar 0] under `depth` extra binders.
+                Shift motive_body's outer-ctx BVars (>= 1) by depth so
+                they skip the new binders; substitute BVar 0 with X."""
+                return subst_bvar(shift(motive_body, depth, 1), 0, X)
+
+            ctx_snap = tuple(ctx.entries)
+            minors: list = []
+            subgoals_out: list = []
+            for ctor_name in decl.constructor_names:
+                cd = self.env.get(ctor_name)
+                ct = inst_levels(cd.type_, cd.level_params, ind_lvls)
+                for pa in param_args:
+                    if not isinstance(ct, Pi):
+                        raise ElabError(
+                            f"induction: bad ctor type for {ctor_name}")
+                    ct = subst_bvar(ct.body, 0, pa)
+                field_types: list = []
+                for _ in range(cd.num_fields):
+                    if not isinstance(ct, Pi):
+                        raise ElabError(
+                            f"induction: bad ctor type for {ctor_name}")
+                    field_types.append(ct.dom)
+                    ct = ct.body
+                rec_rule = next(
+                    (r for r in rec_decl.rules
+                     if r.ctor_name == ctor_name), None)
+                rec_positions = (rec_rule.rec_arg_positions
+                                 if rec_rule else ())
+                n_fields = cd.num_fields
+                n_rec = len(rec_positions)
+                # Build minor type innermost-first:
+                #   motive(ctor params f_0 ... f_{n-1})   at depth n_fields+n_rec
+                # then wrap with Π ih_k : motive(f_{rec_pos_k})  ascending k
+                # then wrap with Π f_j : T_j
+                ctor_app: Expr = Const(ctor_name, ind_lvls)
+                for pa in param_args:
+                    ctor_app = App(ctor_app, shift(pa, n_fields + n_rec))
+                for i in range(n_fields):
+                    # f_i at the inner depth (n_fields binders + n_rec
+                    # ihs).  Inside the innermost body BVar(0) is the
+                    # last IH; BVar(n_rec - 1) is the first IH; BVar(n_rec)
+                    # is f_{n-1}; BVar(n_rec + n_fields - 1) is f_0.
+                    ctor_app = App(ctor_app,
+                                   BVar(n_fields - 1 - i + n_rec))
+                minor_ty = apply_motive(ctor_app, n_fields + n_rec)
+                for k_idx in reversed(range(n_rec)):
+                    rec_field_pos = rec_positions[k_idx]
+                    # Depth at the IH binding location is n_fields + k_idx
+                    # (fields all bound, k_idx IHs already bound above us).
+                    # f_{rec_field_pos} at that depth is
+                    # BVar(n_fields - 1 - rec_field_pos + k_idx).
+                    rec_field_bvar = BVar(
+                        n_fields - 1 - rec_field_pos + k_idx)
+                    ih_ty = apply_motive(rec_field_bvar,
+                                         n_fields + k_idx)
+                    minor_ty = Pi(f"ih{k_idx}", ih_ty, minor_ty)
+                for j in reversed(range(n_fields)):
+                    minor_ty = Pi(f"f{j}", field_types[j], minor_ty)
+                m = self.mctx.fresh(minor_ty)
+                minors.append(m)
+                subgoals_out.append((m.id, ctx_snap))
+            rec_lvls: list = []
+            for lp_name in rec_decl.level_params:
+                if lp_name == rec_decl.motive_universe_param:
+                    rec_lvls.append(v_level)
+                else:
+                    idx = decl.level_params.index(lp_name)
+                    rec_lvls.append(ind_lvls[idx])
+            rec_term: Expr = Const(rec_decl.name, tuple(rec_lvls))
+            for pa in param_args:
+                rec_term = App(rec_term, pa)
+            rec_term = App(rec_term, motive)
+            for m in minors:
+                rec_term = App(rec_term, m)
+            rec_term = App(rec_term, scrut_e)
+            return rec_term, subgoals_out
+
         if kind == "rewrite":
             _, expr, _bvar_stack = tac
             expr_r = _resolve_bvars(expr, ctx)

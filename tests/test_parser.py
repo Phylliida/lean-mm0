@@ -185,6 +185,13 @@ def test_parse_and_verify_nat_mul():
     _run_example("math.lean", "nat_lemmas.lean", "nat_mul.lean")
 
 
+def test_parse_and_verify_induction():
+    # induction uses lift_succ + succ_add from math.lean / nat_lemmas.lean,
+    # Bool.not from bool_ops.lean, length + append from list_ops.lean.
+    _run_example("math.lean", "nat_lemmas.lean", "bool_ops.lean",
+                 "list_ops.lean", "induction.lean")
+
+
 
 
 if __name__ == "__main__":
