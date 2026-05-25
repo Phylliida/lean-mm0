@@ -189,6 +189,12 @@ def test_parse_and_verify_indexed_cases():
     _run_example("indexed_cases.lean")
 
 
+def test_parse_and_verify_revert():
+    # revert example uses zero_add, succ_add, lift_succ from
+    # math.lean / nat_lemmas.lean.
+    _run_example("math.lean", "nat_lemmas.lean", "revert.lean")
+
+
 def test_parse_and_verify_nat_mul():
     _run_example("math.lean", "nat_lemmas.lean", "nat_mul.lean")
 

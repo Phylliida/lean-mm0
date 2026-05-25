@@ -11,10 +11,10 @@ trust boundary.
 
 | | |
 |---|---|
-| Tests | **108 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 41 parser examples) |
-| Total source | ~6.8 kLoC Python + 188 LoC MM0 prelude + 1834 LoC `.lean` examples (41 files) |
+| Tests | **109 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 42 parser examples) |
+| Total source | ~6.8 kLoC Python + 188 LoC MM0 prelude + 1903 LoC `.lean` examples (42 files) |
 | Trusted base | `src/mm0_verify.py` (710 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 51+ commits on `master`; clean working tree |
+| Repo | 52+ commits on `master`; clean working tree |
 
 ## What the pipeline does
 
@@ -158,6 +158,7 @@ What the parser accepts and the elaborator handles:
 | `cases h` | h : `Ind params indices` — emits a recursor app with one fresh meta per ctor as a subgoal.  Each subgoal has type `Π fields, Π ihs, goal`; user `intro`s the fields and IHs.  Non-dependent motive (goal stays G in every branch).  Indexed inductives are supported; the motive is constant over indices too — so case-splits on a proof of `Nat.le n m`-style hypothesis succeed but each branch sees the abstract original G, no index-specialisation |
 | `induction h` | Like `cases h` but with a **dependent** motive — each subgoal's goal is `G[h := ctor pattern]` (specialised, not the abstract original) and each IH has type `motive(rec_field)`.  Requires `h` to be a local FVar.  For *indexed* inductives, also requires every index in `h`'s type to be an FVar (so we can abstract it into the motive's binders); concrete indices would need index unification, not done.  Other context hypotheses depending on an abstracted index keep their original types (no auto-revert).  Subgoal-local intros chained with another `apply` and an `exact <fvar>` close correctly (the wrap is deferred until after all subgoals are solved) |
 | `t1; t2; ...` | seq — focused-goal semantics: each tactic acts on the current focused goal.  Main intros are deferred until the very end so subgoal solutions can reference them as FVars; subgoal-local intros are wrapped into Lams immediately |
+| `revert h` | inverse of `intro`: pulls a hypothesis intro'd earlier in the same `by` block back into the goal as a leading Π binder.  Pops the entry from ctx, closes the goal over its FVar, wraps with Π.  Refuses if a later intro depends on `h` (revert that one first).  Only works on intros, not on theorem binders |
 
 ## Trust boundary detail
 
@@ -239,7 +240,8 @@ b60b6b2  HANDOFF: opaque-def + Theorem + Nat mul algebra
 0ff0ce5  HANDOFF: induction tactic landed
 e81603d  Defer subgoal-local intro wraps (real fix)
 235fa48  Nat.le ordering lemmas (zero_le, le_succ, succ_le_succ, le_of_lt, …)
-(next)   cases + induction on indexed inductives
+7809323  cases + induction on indexed inductives (FVar-index restriction)
+(next)   revert tactic + add_comm via revert+induction
 ```
 
 ### `383b984` — initial commit
@@ -595,7 +597,7 @@ Compared to a production Lean / mathlib stack, the major missing pieces:
 | `apply` tactic (with subgoal generation) | implemented; subgoals carry ctx snapshots and survive intro/seq context switches | — |
 | `simp` tactic | not implemented | needs an equation database + fixpoint iteration |
 | `induction` tactic | implemented (`examples/induction.lean`, `examples/indexed_cases.lean`): dependent motive, IH typed at the recursive sub-term.  Works for Nat, Bool, List, **and indexed inductives like Nat.le when their indices in the scrutinee's type are FVars**.  Subgoal-local intros chained through further `apply`s + `exact <fvar>` work too (wrap deferred to end-of-seq).  Auto-revert of dependent hypotheses + index unification (for concrete indices) not done |
-| `revert` tactic | not implemented | inverse of `intro`; needs careful FVar→BVar conversion of the goal |
+| `revert` tactic | implemented (`examples/revert.lean`) — `revert h` pulls an intro back into the goal as a leading Π.  Naturally pairs with `induction` to generalise a hypothesis before inducting on another |
 | Full `match` syntax in `def` (`def f \| 0 => 0 \| succ k => k`) | not implemented | needs equation compiler |
 | Match on indexed inductives with recursive ctors (`Vec.cons`, `Nat.le.step`) | not implemented | needs IH-motive-application logic that threads per-rec-arg index expressions |
 | Mutual inductives w/ cross-recursor | partial (constructors only) | needs the "tag-encoding" pass |
@@ -622,8 +624,9 @@ Pieces ordered by impact and tractability:
    which is the next engine fix — see item 4).
 
 2. **More tactics** — `rewrite` (`5380a78`), `cases` v1+v2 (`282e66d`,
-   `bcfcd73`), and `induction` (this iteration) are in.  Next: `simp`
-   (rewrite using an equation database), `revert` (inverse of `intro`).
+   `bcfcd73`), `induction`, and `revert` are in.  Next: `simp`
+   (rewrite using an equation database), index unification + auto-revert
+   for `induction` on indexed inductives with concrete indices.
 
 3. **More Decidable instances** — `And` / `Or` / `Not` (`decidable_compose.lean`),
    `Nat.decEq` (`nat_dec_eq.lean`) and `Bool.decEq` (`bool_dec_eq.lean`) are

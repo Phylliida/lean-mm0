@@ -80,7 +80,7 @@ KEYWORDS = {"def", "axiom", "theorem", "example", "instance",
             "fun", "lam", "let", "in",
             "Sort", "Type", "Prop", "forall", "match", "with", "where",
             "by", "exact", "rfl", "intro", "apply", "assumption",
-            "rewrite", "rw", "cases", "induction",
+            "rewrite", "rw", "cases", "induction", "revert",
             "if", "then", "else",
             "->", "=>", ":=", ":", ",", ";",
             "(", ")", ".{", "}", "|", "[", "]"}
@@ -138,7 +138,7 @@ def lex(src: str) -> List[Tok]:
                                     "forall", "match", "with", "where",
                                     "by", "exact", "rfl", "intro",
                                     "apply", "assumption",
-                                    "rewrite", "rw", "cases", "induction",
+                                    "rewrite", "rw", "cases", "induction", "revert",
                                     "if", "then", "else"} else "id"
             out.append(Tok(kind, text, i)); i = j; continue
         raise SyntaxError(f"unexpected character {c!r} at {i}")
@@ -774,10 +774,22 @@ class P:
         """Parse a tactic block: tac1; tac2; ...  (sequence).
 
         Threads `bvar_stack` so an `intro x` makes `x` parseable as a
-        BVar reference in subsequent tactics."""
+        BVar reference in subsequent tactics.  A `revert x` removes the
+        most recent `x` from the stack so subsequent BVar indices stay
+        consistent with the elaborator's ctx."""
+        def _update_stack(stack: list, tac: tuple) -> list:
+            if tac[0] == "intro":
+                return stack + [tac[1]]
+            if tac[0] == "revert":
+                # Remove the LAST occurrence of the name (so subsequent
+                # `intro x` followed by `revert x` cancel out correctly).
+                for i in range(len(stack) - 1, -1, -1):
+                    if stack[i] == tac[1]:
+                        return stack[:i] + stack[i + 1:]
+                return stack
+            return stack
         first = self._parse_single_tactic(lvl_params, bvar_stack)
-        if first[0] == "intro":
-            bvar_stack = bvar_stack + [first[1]]
+        bvar_stack = _update_stack(bvar_stack, first)
         if not self.at(";"):
             return first
         tacs = [first]
@@ -785,8 +797,7 @@ class P:
             self.take()
             nxt = self._parse_single_tactic(lvl_params, bvar_stack)
             tacs.append(nxt)
-            if nxt[0] == "intro":
-                bvar_stack = bvar_stack + [nxt[1]]
+            bvar_stack = _update_stack(bvar_stack, nxt)
         return ("seq", tacs)
 
     def _parse_single_tactic(self, lvl_params, bvar_stack) -> tuple:
@@ -819,6 +830,12 @@ class P:
             self.take()
             e = self.parse_expr(lvl_params, bvar_stack)
             return ("induction", e, list(bvar_stack))
+        if t.text == "revert":
+            self.take()
+            name_tok = self.take()
+            if name_tok.kind != "id":
+                raise SyntaxError("revert expects a name")
+            return ("revert", name_tok.text)
         if t.text == "intro":
             self.take()
             name_tok = self.take()

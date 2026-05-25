@@ -146,6 +146,26 @@ class MetaContext:
         return out
 
 
+def _references_fvar(e: Expr, name: str) -> bool:
+    """Returns True if `e` contains an FVar named `name`.  Used by
+    `revert` to refuse popping a hypothesis that a later one depends on."""
+    if isinstance(e, FVar):
+        return e.name == name
+    if isinstance(e, (Sort, BVar, Const, Meta, By)):
+        return False
+    if isinstance(e, Explicit):
+        return _references_fvar(e.inner, name)
+    if isinstance(e, App):
+        return _references_fvar(e.fn, name) or _references_fvar(e.arg, name)
+    if isinstance(e, (Lam, Pi)):
+        return _references_fvar(e.dom, name) or _references_fvar(e.body, name)
+    if isinstance(e, Let):
+        return (_references_fvar(e.type_, name)
+                or _references_fvar(e.value, name)
+                or _references_fvar(e.body, name))
+    return False
+
+
 def _beta_norm(e: Expr) -> Expr:
     """Beta-only normalisation: reduce every `(λx. body) arg` redex
     recursively, without doing δ (definition unfolding) or ι (recursor
@@ -1325,6 +1345,48 @@ class Elaborator:
                     fv = ctx.push(name, dom)
                     focused_intros.append((name, dom, fv))
                     focused_goal = open_(goal_w.body, FVar(fv, dom))
+                    continue
+                if tac[0] == "revert":
+                    # Anti-intro: find the named intro in focused_intros,
+                    # check that no later intro's type depends on it
+                    # (otherwise reverting would leave a dangling FVar
+                    # reference), then pop it from focused_intros and ctx
+                    # and wrap focused_goal with a Π binder.
+                    name = tac[1]
+                    target_idx = None
+                    for i, (nm, _, _) in enumerate(focused_intros):
+                        if nm == name:
+                            target_idx = i
+                    if target_idx is None:
+                        raise ElabError(
+                            f"revert: no intro named {name!r} in scope. "
+                            f"revert only works on hypotheses introduced "
+                            f"by `intro` in this tactic block; theorem "
+                            f"binders cannot be reverted.")
+                    (rev_name, rev_dom, rev_fv) = focused_intros[target_idx]
+                    # Reject if any later intro depends on this FVar.
+                    for nm2, dom2, _fv2 in focused_intros[target_idx + 1:]:
+                        if _references_fvar(dom2, rev_fv):
+                            raise ElabError(
+                                f"revert: later hypothesis {nm2!r} depends "
+                                f"on {name!r}; revert {nm2!r} first or "
+                                f"reorder")
+                    # Pop the corresponding ctx entry (not necessarily
+                    # the last one — find by name).
+                    pop_idx = None
+                    for i in range(len(ctx.entries) - 1, -1, -1):
+                        if ctx.entries[i][0] == rev_fv:
+                            pop_idx = i
+                            break
+                    if pop_idx is None:
+                        raise ElabError(
+                            f"revert: ctx entry for {rev_fv!r} not found "
+                            f"(internal error)")
+                    del ctx.entries[pop_idx]
+                    del focused_intros[target_idx]
+                    focused_goal = Pi(
+                        rev_name, rev_dom,
+                        close(focused_goal, rev_fv, 0))
                     continue
                 # Non-intro tactic: produce a term for the focused goal.
                 term, sub_metas = self._run_tactic(tac, focused_goal, ctx)
