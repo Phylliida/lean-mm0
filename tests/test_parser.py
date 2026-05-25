@@ -185,6 +185,10 @@ def test_parse_and_verify_nat_le_more():
     _run_example("nat_le.lean", "nat_lt.lean", "nat_le_more.lean")
 
 
+def test_parse_and_verify_indexed_cases():
+    _run_example("indexed_cases.lean")
+
+
 def test_parse_and_verify_nat_mul():
     _run_example("math.lean", "nat_lemmas.lean", "nat_mul.lean")
 

@@ -882,22 +882,43 @@ class Elaborator:
                 raise ElabError(
                     f"cases: {head.name} is not an inductive")
             rec_decl = self.env.get(decl.recursor_name)
-            if decl.num_indices > 0:
-                raise ElabError(
-                    f"cases: indexed inductive {head.name} not yet "
-                    f"supported (v1)")
             n_params = decl.num_params
+            n_indices = decl.num_indices
             param_args = ind_args[:n_params]
+            index_args = ind_args[n_params:n_params + n_indices]
             ind_lvls = head.levels
             G = self.mctx.instantiate(goal)
+            # Build the motive: λ idx_0 … idx_{i-1}. λ scrut. G_shifted.
+            # Non-dependent motive (body ignores the new binders), so we
+            # just shift G past n_indices + 1 binders.
+            # `ind_applied` is the scrut binder's domain — it lives one
+            # level under the index binders, so its param args shift by
+            # n_indices and the index slots use BVars (innermost-last).
             ind_applied = Const(decl.name, ind_lvls)
             for pa in param_args:
-                ind_applied = App(ind_applied, pa)
-            # v1: non-dependent motive only.  Dependent motive (motive
-            # body referencing the scrutinee) would need each minor's
-            # return type to be `G[scrut := ctor_pattern]`, which
-            # requires careful BVar bookkeeping that the v1 code skips.
-            motive = Lam("_", ind_applied, shift(G, 1))
+                ind_applied = App(ind_applied, shift(pa, n_indices))
+            for i in range(n_indices):
+                ind_applied = App(ind_applied, BVar(n_indices - 1 - i))
+            motive = Lam("_scrut", ind_applied, shift(G, n_indices + 1))
+            if n_indices > 0:
+                # Wrap with index binders; the index types come from the
+                # inductive's signature (Π params, Π indices, Sort _).
+                ind_ty = inst_levels(decl.type_, decl.level_params, ind_lvls)
+                for pa in param_args:
+                    if not isinstance(ind_ty, Pi):
+                        raise ElabError(
+                            f"cases: {decl.name} has bad inductive type")
+                    ind_ty = subst_bvar(ind_ty.body, 0, pa)
+                index_types: list = []
+                cur_ty = ind_ty
+                for _ in range(n_indices):
+                    if not isinstance(cur_ty, Pi):
+                        raise ElabError(
+                            f"cases: {decl.name} has bad inductive type")
+                    index_types.append(cur_ty.dom)
+                    cur_ty = cur_ty.body
+                for i in reversed(range(n_indices)):
+                    motive = Lam(f"_i{i}", index_types[i], motive)
             G_ty_w = self.kernel.whnf(
                 self.mctx.instantiate(self._infer_elaborated(G, ctx)),
                 ctx)
@@ -957,6 +978,8 @@ class Elaborator:
             rec_term = App(rec_term, motive)
             for m in minors:
                 rec_term = App(rec_term, m)
+            for ia in index_args:
+                rec_term = App(rec_term, ia)
             rec_term = App(rec_term, scrut_e)
             return rec_term, subgoals_out
 
@@ -987,23 +1010,62 @@ class Elaborator:
             if not isinstance(decl, Inductive):
                 raise ElabError(
                     f"induction: {head.name} is not an inductive")
-            if decl.num_indices > 0:
-                raise ElabError(
-                    f"induction: indexed inductive {head.name} not yet "
-                    f"supported")
             rec_decl = self.env.get(decl.recursor_name)
             n_params = decl.num_params
+            n_indices = decl.num_indices
             param_args = ind_args[:n_params]
+            index_args = ind_args[n_params:n_params + n_indices]
+            # For indexed inductives, require all index args in the
+            # scrutinee's type to be FVars — we abstract them into the
+            # motive's binders.  Concrete index args would need index
+            # unification (generate Eq-hypotheses bridging the concrete
+            # index to the constructor's index pattern); not done here.
+            if n_indices > 0:
+                for ia in index_args:
+                    if not isinstance(ia, FVar):
+                        raise ElabError(
+                            f"induction: indexed inductive {decl.name} "
+                            f"with non-FVar index {show_expr(ia)} not "
+                            f"supported (index unification not done)")
             ind_lvls = head.levels
             G = self.mctx.instantiate(goal)
+            # Build ind_applied with the original FVars (params and the
+            # index FVars from the scrutinee's type).  We then `close`
+            # those FVars one at a time as we add binders OUTSIDE — close
+            # both walks into the existing dom and into the body and
+            # shifts BVars consistently, so we get correct depth-correct
+            # references.  (Pre-placing BVars in ind_applied gets shifted
+            # by close and ends up out of bounds.)
             ind_applied: Expr = Const(decl.name, ind_lvls)
             for pa in param_args:
                 ind_applied = App(ind_applied, pa)
-            # Dependent motive: λ x : ind_applied. G[scrut_e := x].
-            # `close` replaces FVar(scrut) with BVar(0) and shifts the rest
-            # of the BVars in G up by one to make room for the new binder.
-            motive_body = close(G, scrut_e.name, 0)
-            motive = Lam(scrut_e.name, ind_applied, motive_body)
+            for ia in index_args:
+                ind_applied = App(ind_applied, ia)
+            # Build motive body: close G over the scrutinee FVar first,
+            # then wrap with the scrut Lam.  After that, for each index
+            # (last-to-first), close the index FVar (close descends the
+            # existing Lams and increments cutoff) and wrap with the
+            # index Lam.
+            body = close(G, scrut_e.name, 0)
+            motive = Lam(scrut_e.name, ind_applied, body)
+            if n_indices > 0:
+                ind_ty = inst_levels(decl.type_, decl.level_params, ind_lvls)
+                for pa in param_args:
+                    if not isinstance(ind_ty, Pi):
+                        raise ElabError(
+                            f"induction: {decl.name} has bad inductive type")
+                    ind_ty = subst_bvar(ind_ty.body, 0, pa)
+                index_types: list = []
+                cur_ty = ind_ty
+                for _ in range(n_indices):
+                    if not isinstance(cur_ty, Pi):
+                        raise ElabError(
+                            f"induction: {decl.name} has bad inductive type")
+                    index_types.append(cur_ty.dom)
+                    cur_ty = cur_ty.body
+                for i in reversed(range(n_indices)):
+                    motive = close(motive, index_args[i].name, 0)
+                    motive = Lam(f"_i{i}", index_types[i], motive)
             G_ty_w = self.kernel.whnf(
                 self.mctx.instantiate(self._infer_elaborated(G, ctx)),
                 ctx)
@@ -1013,11 +1075,28 @@ class Elaborator:
                     f"{show_expr(G_ty_w)}")
             v_level = G_ty_w.level
 
-            def apply_motive(X: Expr, depth: int) -> Expr:
-                """motive_body[X / BVar 0] under `depth` extra binders.
-                Shift motive_body's outer-ctx BVars (>= 1) by depth so
-                they skip the new binders; substitute BVar 0 with X."""
-                return subst_bvar(shift(motive_body, depth, 1), 0, X)
+            # Pull out motive_body for the apply_motive helper.  It lives
+            # under n_indices + 1 Lams; its BVars 0 .. n_indices are the
+            # motive's own binders (BVar(0) = scrut, BVar(n_indices) = i_0),
+            # everything BVar >= n_indices+1 references outer ctx.
+            motive_body = motive
+            for _ in range(n_indices + 1):
+                motive_body = motive_body.body
+
+            def apply_motive(idx_vals: list, scrut_val: Expr,
+                              depth: int) -> Expr:
+                """motive applied to (idx_vals[0], …, idx_vals[n-1], scrut_val)
+                inside `depth` extra binders.  Shift motive_body's outer-ctx
+                BVars by `depth`, then substitute the motive's own binders
+                (BVar(0)=scrut, then the indices last-to-first)."""
+                shifted = shift(motive_body, depth, n_indices + 1)
+                result = subst_bvar(shifted, 0, scrut_val)
+                # After subst, the n_indices remaining motive-binder BVars
+                # are at positions 0 .. n_indices-1, corresponding to
+                # i_{n-1}, i_{n-2}, …, i_0.  Substitute innermost first.
+                for i in reversed(range(n_indices)):
+                    result = subst_bvar(result, 0, idx_vals[i])
+                return result
 
             ctx_snap = tuple(ctx.entries)
             minors: list = []
@@ -1031,44 +1110,68 @@ class Elaborator:
                             f"induction: bad ctor type for {ctor_name}")
                     ct = subst_bvar(ct.body, 0, pa)
                 field_types: list = []
+                ctor_ret = ct
                 for _ in range(cd.num_fields):
-                    if not isinstance(ct, Pi):
+                    if not isinstance(ctor_ret, Pi):
                         raise ElabError(
                             f"induction: bad ctor type for {ctor_name}")
-                    field_types.append(ct.dom)
-                    ct = ct.body
+                    field_types.append(ctor_ret.dom)
+                    ctor_ret = ctor_ret.body
+                # ctor_ret is now `Ind params ctor_index_patterns(field_BVars)`.
+                # Its BVars index fields in the ctor's Pi convention: after
+                # all n_fields binders, BVar(0) = last field, BVar(j) = field
+                # (n_fields - 1 - j).  Extract the index args.
+                ret_head, ret_args = _spine(ctor_ret)
+                if not (isinstance(ret_head, Const)
+                        and ret_head.name == decl.name):
+                    raise ElabError(
+                        f"induction: ctor {ctor_name} return type has "
+                        f"unexpected head {show_expr(ret_head)}")
+                ctor_index_patterns = ret_args[n_params:n_params + n_indices]
                 rec_rule = next(
                     (r for r in rec_decl.rules
                      if r.ctor_name == ctor_name), None)
                 rec_positions = (rec_rule.rec_arg_positions
                                  if rec_rule else ())
+                rec_index_templates = (rec_rule.rec_index_templates
+                                       if rec_rule else ())
                 n_fields = cd.num_fields
                 n_rec = len(rec_positions)
-                # Build minor type innermost-first:
-                #   motive(ctor params f_0 ... f_{n-1})   at depth n_fields+n_rec
-                # then wrap with Π ih_k : motive(f_{rec_pos_k})  ascending k
-                # then wrap with Π f_j : T_j
+                # Build the minor type innermost-first.
+                # Inside the innermost body we are at depth n_fields + n_rec
+                # extra binders beyond the outer ctx.  Fields are at
+                # BVar(n_fields-1-i + n_rec); IHs at BVar(n_rec-1-k_idx).
                 ctor_app: Expr = Const(ctor_name, ind_lvls)
                 for pa in param_args:
                     ctor_app = App(ctor_app, shift(pa, n_fields + n_rec))
                 for i in range(n_fields):
-                    # f_i at the inner depth (n_fields binders + n_rec
-                    # ihs).  Inside the innermost body BVar(0) is the
-                    # last IH; BVar(n_rec - 1) is the first IH; BVar(n_rec)
-                    # is f_{n-1}; BVar(n_rec + n_fields - 1) is f_0.
                     ctor_app = App(ctor_app,
                                    BVar(n_fields - 1 - i + n_rec))
-                minor_ty = apply_motive(ctor_app, n_fields + n_rec)
+                # The ctor's index patterns reference field BVars in the
+                # ctor's own Pi convention (where field i is at BVar
+                # (n_fields-1-i)).  In our minor's innermost context the
+                # same fields live n_rec deeper, so shift by n_rec.
+                ctor_idx_vals_inner = [shift(pat, n_rec)
+                                       for pat in ctor_index_patterns]
+                minor_ty = apply_motive(ctor_idx_vals_inner, ctor_app,
+                                         n_fields + n_rec)
                 for k_idx in reversed(range(n_rec)):
                     rec_field_pos = rec_positions[k_idx]
-                    # Depth at the IH binding location is n_fields + k_idx
-                    # (fields all bound, k_idx IHs already bound above us).
-                    # f_{rec_field_pos} at that depth is
-                    # BVar(n_fields - 1 - rec_field_pos + k_idx).
                     rec_field_bvar = BVar(
                         n_fields - 1 - rec_field_pos + k_idx)
-                    ih_ty = apply_motive(rec_field_bvar,
-                                         n_fields + k_idx)
+                    # rec_index_templates use the env_no_rec convention:
+                    # env = params ++ motives ++ minors ++ fields, so
+                    # BVar(j) for j < n_fields references field
+                    # (n_fields - 1 - j) (last-field-first).  In our IH
+                    # context (depth n_fields + k_idx), the same fields
+                    # are k_idx deeper than at the env_no_rec base.
+                    if n_indices > 0:
+                        ih_idx_vals = [shift(t, k_idx)
+                                       for t in rec_index_templates[k_idx]]
+                    else:
+                        ih_idx_vals = []
+                    ih_ty = apply_motive(ih_idx_vals, rec_field_bvar,
+                                          n_fields + k_idx)
                     minor_ty = Pi(f"ih{k_idx}", ih_ty, minor_ty)
                 for j in reversed(range(n_fields)):
                     minor_ty = Pi(f"f{j}", field_types[j], minor_ty)
@@ -1088,6 +1191,8 @@ class Elaborator:
             rec_term = App(rec_term, motive)
             for m in minors:
                 rec_term = App(rec_term, m)
+            for ia in index_args:
+                rec_term = App(rec_term, ia)
             rec_term = App(rec_term, scrut_e)
             return rec_term, subgoals_out
 

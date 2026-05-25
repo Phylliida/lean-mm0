@@ -11,10 +11,10 @@ trust boundary.
 
 | | |
 |---|---|
-| Tests | **107 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 40 parser examples) |
-| Total source | ~6.7 kLoC Python + 188 LoC MM0 prelude + 1761 LoC `.lean` examples (40 files) |
+| Tests | **108 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 41 parser examples) |
+| Total source | ~6.8 kLoC Python + 188 LoC MM0 prelude + 1834 LoC `.lean` examples (41 files) |
 | Trusted base | `src/mm0_verify.py` (710 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 50+ commits on `master`; clean working tree |
+| Repo | 51+ commits on `master`; clean working tree |
 
 ## What the pipeline does
 
@@ -155,8 +155,8 @@ What the parser accepts and the elaborator handles:
 | `apply f` | elaborate `f`, peel its Π binders as fresh metas, unify the return type with the goal; explicit metas the unifier didn't pin become subgoals (each carrying a ctx snapshot from creation) |
 | `assumption` | succeed if some local hypothesis (innermost-first) is def-equal to the goal |
 | `rewrite h` / `rw h` | h : Eq α a b — replaces all syntactic occurrences of `a` in the goal with `b`; leaves the rewritten goal as a subgoal |
-| `cases h` | h : `Ind params` — emits a recursor app with one fresh meta per ctor as a subgoal.  Each subgoal has type `Π fields, Π ihs, goal`; user `intro`s the fields and IHs.  Non-indexed inductives only (recursive ctors get an opaque IH binder) |
-| `induction h` | Like `cases h` but with a **dependent** motive — each subgoal's goal is `G[h := ctor pattern]` (specialised, not the abstract original) and each IH has type `motive(rec_field)` (the goal at the recursive sub-term).  Requires `h` to be a local FVar.  Non-indexed inductives only.  Subgoal-local intros chained with another `apply` and an `exact <fvar>` now close correctly (the wrap is deferred until after all subgoals are solved) |
+| `cases h` | h : `Ind params indices` — emits a recursor app with one fresh meta per ctor as a subgoal.  Each subgoal has type `Π fields, Π ihs, goal`; user `intro`s the fields and IHs.  Non-dependent motive (goal stays G in every branch).  Indexed inductives are supported; the motive is constant over indices too — so case-splits on a proof of `Nat.le n m`-style hypothesis succeed but each branch sees the abstract original G, no index-specialisation |
+| `induction h` | Like `cases h` but with a **dependent** motive — each subgoal's goal is `G[h := ctor pattern]` (specialised, not the abstract original) and each IH has type `motive(rec_field)`.  Requires `h` to be a local FVar.  For *indexed* inductives, also requires every index in `h`'s type to be an FVar (so we can abstract it into the motive's binders); concrete indices would need index unification, not done.  Other context hypotheses depending on an abstracted index keep their original types (no auto-revert).  Subgoal-local intros chained with another `apply` and an `exact <fvar>` close correctly (the wrap is deferred until after all subgoals are solved) |
 | `t1; t2; ...` | seq — focused-goal semantics: each tactic acts on the current focused goal.  Main intros are deferred until the very end so subgoal solutions can reference them as FVars; subgoal-local intros are wrapped into Lams immediately |
 
 ## Trust boundary detail
@@ -238,7 +238,8 @@ b60b6b2  HANDOFF: opaque-def + Theorem + Nat mul algebra
 6569c95  induction tactic (dependent-motive cases) + examples
 0ff0ce5  HANDOFF: induction tactic landed
 e81603d  Defer subgoal-local intro wraps (real fix)
-(next)   Nat.le ordering lemmas via the new induction tactic
+235fa48  Nat.le ordering lemmas (zero_le, le_succ, succ_le_succ, le_of_lt, …)
+(next)   cases + induction on indexed inductives
 ```
 
 ### `383b984` — initial commit
@@ -593,7 +594,7 @@ Compared to a production Lean / mathlib stack, the major missing pieces:
 | `cases` tactic | implemented (v1+v2: non-recursive and recursive ctors; non-dependent motive only — see below) | dependent motive would need each minor's return type to be `G[scrut := ctor_pattern]` with careful BVar bookkeeping |
 | `apply` tactic (with subgoal generation) | implemented; subgoals carry ctx snapshots and survive intro/seq context switches | — |
 | `simp` tactic | not implemented | needs an equation database + fixpoint iteration |
-| `induction` tactic | implemented (`examples/induction.lean`): dependent motive, IH typed at the recursive sub-term.  Non-indexed inductives only.  Works for Nat, Bool (no-rec), List, …  Subgoal-local intros chained through further `apply`s + `exact <fvar>` work too (wrap deferred to end-of-seq) |
+| `induction` tactic | implemented (`examples/induction.lean`, `examples/indexed_cases.lean`): dependent motive, IH typed at the recursive sub-term.  Works for Nat, Bool, List, **and indexed inductives like Nat.le when their indices in the scrutinee's type are FVars**.  Subgoal-local intros chained through further `apply`s + `exact <fvar>` work too (wrap deferred to end-of-seq).  Auto-revert of dependent hypotheses + index unification (for concrete indices) not done |
 | `revert` tactic | not implemented | inverse of `intro`; needs careful FVar→BVar conversion of the goal |
 | Full `match` syntax in `def` (`def f \| 0 => 0 \| succ k => k`) | not implemented | needs equation compiler |
 | Match on indexed inductives with recursive ctors (`Vec.cons`, `Nat.le.step`) | not implemented | needs IH-motive-application logic that threads per-rec-arg index expressions |
