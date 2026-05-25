@@ -11,10 +11,10 @@ trust boundary.
 
 | | |
 |---|---|
-| Tests | **110 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 43 parser examples) |
-| Total source | ~6.8 kLoC Python + 188 LoC MM0 prelude + 2128 LoC `.lean` examples (43 files) |
+| Tests | **111 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 44 parser examples) |
+| Total source | ~6.8 kLoC Python + 188 LoC MM0 prelude + 2328 LoC `.lean` examples (44 files) |
 | Trusted base | `src/mm0_verify.py` (710 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 53+ commits on `master`; clean working tree |
+| Repo | 54+ commits on `master`; clean working tree |
 
 ## What the pipeline does
 
@@ -242,7 +242,8 @@ e81603d  Defer subgoal-local intro wraps (real fix)
 235fa48  Nat.le ordering lemmas (zero_le, le_succ, succ_le_succ, le_of_lt, …)
 7809323  cases + induction on indexed inductives (FVar-index restriction)
 af21325  revert tactic + add_comm via revert+induction
-(next)   List.decEq for List Nat + no-confusion helpers
+b72c7ed  List.decEq for List Nat + no-confusion helpers
+(next)   Polymorphic List.decEq + match-on-inner-Lam-binder parser fix
 ```
 
 ### `383b984` — initial commit
@@ -630,10 +631,11 @@ Pieces ordered by impact and tractability:
    for `induction` on indexed inductives with concrete indices.
 
 3. **More Decidable instances** — `And` / `Or` / `Not` (`decidable_compose.lean`),
-   `Nat.decEq` (`nat_dec_eq.lean`), `Bool.decEq` (`bool_dec_eq.lean`), and
-   `List.decEq` for `List Nat` (`list_dec_eq.lean`) are done.  Open: a
-   polymorphic `List.decEq` parameterised over an element-wise decidable
-   equality, and `Decidable (Nat.le a b)`.
+   `Nat.decEq` (`nat_dec_eq.lean`), `Bool.decEq` (`bool_dec_eq.lean`),
+   `List.decEq` for `List Nat` (`list_dec_eq.lean`), and a polymorphic
+   `List.decEq` (`list_dec_eq_poly.lean`) parameterised over an
+   element-wise decidable equality are done.  Open: `Decidable (Nat.le a b)`,
+   `Decidable (Nat.lt a b)`, decidable membership for lists.
 
 4. **Indexed-inductive match v2 (recursive ctors)** — extend the v1
    indexed match to handle `Nat.le.step`, `Vec.cons`, etc.  Needs the
@@ -709,6 +711,17 @@ Pieces ordered by impact and tractability:
   search, so it works inside recursor minors where the goal looks like
   `(λk. motive k) (ctor args)` (an unreduced β-redex).  See `_beta_norm`
   in `elaborator.py`.
+
+- **`match` on an inner-`fun`-bound variable.**  When a `match` is
+  scrutinising a BVar from a `fun` binder inside the def's body (e.g.
+  `fun (ys : List α) => match ys with ...`), the parser pulls the
+  scrutinee's type out of an `inner_lam_types` stack that the `fun`
+  parser populates on entry and pops on exit.  Earlier, the parser
+  always tried to interpret a BVar scrutinee as a def binder — which
+  silently worked for monomorphic types (no BVars to drift) but produced
+  a wrong shifted type with BVars off by one for polymorphic ones, so
+  `List.decEq` for polymorphic `α` blew up in unification with a level
+  meta.  See the `inner_lam_count`/`bidx` logic in the match parser.
 
 ## Caveat
 

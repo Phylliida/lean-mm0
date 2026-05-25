@@ -164,6 +164,12 @@ class P:
         # The def's binders (name, type, implicit, inst_implicit) so a
         # `match` on a BVar can recover the scrutinee's type.
         self.current_decl_binders: Optional[List[Tuple[str, Expr, bool, bool]]] = None
+        # Types of inner-Lam binders introduced WITHIN the def's body
+        # (parallel to the inner-Lam portion of bvar_stack).  Used by the
+        # match parser when the scrutinee is an inner-Lam BVar so it can
+        # produce a correct scrut_ty_hint.  Stack semantics: push when
+        # entering a `fun` binder, pop on exit.
+        self.inner_lam_types: List[Expr] = []
 
     def peek(self) -> Optional[Tok]:
         return self.toks[self.i] if self.i < len(self.toks) else None
@@ -608,9 +614,15 @@ class P:
             if not collected:
                 raise SyntaxError("fun needs at least one binder")
             self.eat("=>")
-            body = self.parse_expr(
-                lvl_params,
-                bvar_stack + [nm for nm, _ in collected])
+            # Push types onto inner_lam_types so a match-on-this-binder
+            # inside body can recover the scrutinee type.
+            self.inner_lam_types.extend(ty for _, ty in collected)
+            try:
+                body = self.parse_expr(
+                    lvl_params,
+                    bvar_stack + [nm for nm, _ in collected])
+            finally:
+                del self.inner_lam_types[len(self.inner_lam_types) - len(collected):]
             for nm, ty in reversed(collected):
                 body = Lam(nm, ty, body)
             return body
@@ -671,23 +683,43 @@ class P:
             rec_name = None
             scrut_ty_hint = None
             rec_arg_pos = -1
-            if isinstance(scrutinee, BVar) and self.current_decl_name is not None:
-                rec_name = self.current_decl_name
-                if self.current_decl_binders is not None:
-                    binder_list = self.current_decl_binders
-                    idx_from_end = scrutinee.idx
-                    if idx_from_end < len(binder_list):
-                        b = binder_list[-(idx_from_end + 1)]
+            if isinstance(scrutinee, BVar):
+                # Three scrutinee-source cases:
+                #  (a) scrutinee is an inner-Lam binder: look up its type
+                #      in inner_lam_types; never treat as structural
+                #      recursion (rec_name stays None).
+                #  (b) scrutinee is a def binder of the current decl:
+                #      structural recursion path — set rec_name, compute
+                #      rec_arg_pos, take type from current_decl_binders.
+                #  (c) neither: leave scrut_ty_hint as None and let
+                #      _compile_match's `_has_bvar` check fail.
+                idx_from_end = scrutinee.idx
+                binder_list = self.current_decl_binders or []
+                inner_lam_count = max(
+                    0, len(bvar_stack) - len(binder_list))
+                if idx_from_end < inner_lam_count:
+                    # case (a)
+                    inner_pos = inner_lam_count - 1 - idx_from_end
+                    if inner_pos < len(self.inner_lam_types):
                         from .expr import shift as _shft
-                        scrut_ty_hint = _shft(b[1], 1 + scrutinee.idx)
-                        # Compute the rec arg's position in user-PARSED
-                        # recursive calls: matched arg's decl-index minus
-                        # the number of implicit binders before it.
-                        matched_decl_idx = len(binder_list) - 1 - idx_from_end
-                        n_implicit_before = sum(
-                            1 for bdr in binder_list[:matched_decl_idx]
-                            if bdr[2] or bdr[3])
-                        rec_arg_pos = matched_decl_idx - n_implicit_before
+                        scrut_ty_hint = _shft(
+                            self.inner_lam_types[inner_pos],
+                            1 + scrutinee.idx)
+                elif (self.current_decl_name is not None
+                          and binder_list
+                          and idx_from_end - inner_lam_count
+                                < len(binder_list)):
+                    # case (b)
+                    rec_name = self.current_decl_name
+                    bidx = idx_from_end - inner_lam_count
+                    b = binder_list[-(bidx + 1)]
+                    from .expr import shift as _shft
+                    scrut_ty_hint = _shft(b[1], 1 + scrutinee.idx)
+                    matched_decl_idx = len(binder_list) - 1 - bidx
+                    n_implicit_before = sum(
+                        1 for bdr in binder_list[:matched_decl_idx]
+                        if bdr[2] or bdr[3])
+                    rec_arg_pos = matched_decl_idx - n_implicit_before
             return _compile_match(scrutinee, result_ty, arms, self.env,
                                   lvl_params, bvar_stack, rec_name=rec_name,
                                   scrut_ty_hint=scrut_ty_hint,

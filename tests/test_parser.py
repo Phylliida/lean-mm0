@@ -200,6 +200,10 @@ def test_parse_and_verify_list_dec_eq():
     _run_example("nat_inj.lean", "nat_dec_eq.lean", "list_dec_eq.lean")
 
 
+def test_parse_and_verify_list_dec_eq_poly():
+    _run_example("nat_inj.lean", "nat_dec_eq.lean", "list_dec_eq_poly.lean")
+
+
 def test_parse_and_verify_nat_mul():
     _run_example("math.lean", "nat_lemmas.lean", "nat_mul.lean")
 
