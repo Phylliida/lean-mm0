@@ -12,9 +12,9 @@ trust boundary.
 | | |
 |---|---|
 | Tests | **104 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 37 parser examples) |
-| Total source | ~6.5 kLoC Python + 188 LoC MM0 prelude + 1341 LoC `.lean` examples |
+| Total source | ~6.5 kLoC Python + 188 LoC MM0 prelude + 1337 LoC `.lean` examples (37 files) |
 | Trusted base | `src/mm0_verify.py` (669 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 40 commits on `master`; clean working tree |
+| Repo | 43 commits on `master`; clean working tree |
 
 ## What the pipeline does
 
@@ -77,12 +77,12 @@ lean-mm0/
 │   │                   instance synth (backtracking), tactics
 │   ├── emitter.py      kernel derivation → MM0 proof text
 │   └── mm0_verify.py   ← TRUSTED: MM0 s-expression verifier (669 LoC)
-├── examples/           21 .lean files (708 LoC) that compile + verify
+├── examples/           37 .lean files (1337 LoC) that compile + verify
 ├── tests/
 │   ├── test_kernel_smoke.py   (7 tests)
 │   ├── test_emit_basic.py     (3 tests)
 │   ├── suite.py               (57 tests across 14 categories)
-│   └── test_parser.py         (21 .lean examples, each round-tripped)
+│   └── test_parser.py         (37 .lean examples, each round-tripped)
 └── run_all.py          single entry point: runs all 4 test files
 ```
 
@@ -179,7 +179,7 @@ accept something false — only reject something true.
 
 ## What's been built (chronological)
 
-11 commits, each adding a coherent slice:
+43 commits — feature commits + HANDOFF updates interleaved:
 
 ```
 383b984  Initial commit: lean-mm0 prototype
@@ -223,6 +223,8 @@ f5e54a4  HANDOFF for emitter fix
 745cc0f  Nat.lt definition + Nat.lt_le composition
 9be2bf2  HANDOFF for Nat.lt
 bcfcd73  cases extended to recursive ctors (v2)
+bef1c56  HANDOFF for cases v2
+0c5cec8  cases: document v1 limitation (non-dependent motive only)
 ```
 
 ### `383b984` — initial commit
@@ -572,10 +574,14 @@ Compared to a production Lean / mathlib stack, the major missing pieces:
 
 | Feature | Status | Why hard |
 |---|---|---|
-| `Decidable` / `if then else` | implemented (`Decidable.isTrue/isFalse`, `ite`, `if/then/else` sugar) | — |
-| `simp`, rewriting tactic | not implemented | needs the tactic monad to be more general |
-| `apply` tactic (with subgoal generation) | basic version implemented | a full version would handle subgoals escaping `intro` and named goals |
+| `Decidable` / `if then else` | implemented (`Decidable.isTrue/isFalse`, `ite`, `if/then/else` sugar, `Nat.decEq`, `Bool.decEq`, composition `And`/`Or`/`Not`) | — |
+| `rewrite` / `rw` tactic | implemented (builds `Eq.rec` with motive abstracting LHS) | — |
+| `cases` tactic | implemented (v1+v2: non-recursive and recursive ctors; non-dependent motive only — see below) | dependent motive would need each minor's return type to be `G[scrut := ctor_pattern]` with careful BVar bookkeeping |
+| `apply` tactic (with subgoal generation) | implemented; subgoals carry ctx snapshots and survive intro/seq context switches | — |
+| `simp` tactic | not implemented | needs an equation database + fixpoint iteration |
+| `revert` / `induction` tactics | not implemented | `induction` is `cases` with the IH exposed under the right type, would benefit from dependent motive |
 | Full `match` syntax in `def` (`def f \| 0 => 0 \| succ k => k`) | not implemented | needs equation compiler |
+| Match on indexed inductives with recursive ctors (`Vec.cons`, `Nat.le.step`) | not implemented | needs IH-motive-application logic that threads per-rec-arg index expressions |
 | Mutual inductives w/ cross-recursor | partial (constructors only) | needs the "tag-encoding" pass |
 | Notation/macro system | minimal (only `infix*`) | real Lean macros are a programmable language |
 | Proof irrelevance | axiom in prelude; not auto-applied | needs type-aware def-eq |
