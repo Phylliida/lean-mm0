@@ -156,7 +156,7 @@ What the parser accepts and the elaborator handles:
 | `assumption` | succeed if some local hypothesis (innermost-first) is def-equal to the goal |
 | `rewrite h` / `rw h` | h : Eq α a b — replaces all syntactic occurrences of `a` in the goal with `b`; leaves the rewritten goal as a subgoal |
 | `cases h` | h : `Ind params` — emits a recursor app with one fresh meta per ctor as a subgoal.  Each subgoal has type `Π fields, Π ihs, goal`; user `intro`s the fields and IHs.  Non-indexed inductives only (recursive ctors get an opaque IH binder) |
-| `induction h` | Like `cases h` but with a **dependent** motive — each subgoal's goal is `G[h := ctor pattern]` (specialised, not the abstract original) and each IH has type `motive(rec_field)` (the goal at the recursive sub-term).  Requires `h` to be a local FVar.  Non-indexed inductives only |
+| `induction h` | Like `cases h` but with a **dependent** motive — each subgoal's goal is `G[h := ctor pattern]` (specialised, not the abstract original) and each IH has type `motive(rec_field)` (the goal at the recursive sub-term).  Requires `h` to be a local FVar.  Non-indexed inductives only.  Subgoal-local intros chained with another `apply` and an `exact <fvar>` now close correctly (the wrap is deferred until after all subgoals are solved) |
 | `t1; t2; ...` | seq — focused-goal semantics: each tactic acts on the current focused goal.  Main intros are deferred until the very end so subgoal solutions can reference them as FVars; subgoal-local intros are wrapped into Lams immediately |
 
 ## Trust boundary detail
@@ -590,7 +590,7 @@ Compared to a production Lean / mathlib stack, the major missing pieces:
 | `cases` tactic | implemented (v1+v2: non-recursive and recursive ctors; non-dependent motive only — see below) | dependent motive would need each minor's return type to be `G[scrut := ctor_pattern]` with careful BVar bookkeeping |
 | `apply` tactic (with subgoal generation) | implemented; subgoals carry ctx snapshots and survive intro/seq context switches | — |
 | `simp` tactic | not implemented | needs an equation database + fixpoint iteration |
-| `induction` tactic | implemented (`examples/induction.lean`): dependent motive, IH typed at the recursive sub-term.  Non-indexed inductives only.  Works for Nat, Bool (no-rec), List, …  Limitation: chained `apply f; intro …; exact ih` inside a single subgoal can lose the `ih` reference because the seq interpreter wraps subgoal-local intros at apply time; use `exact (f … ih)` as a one-shot instead |
+| `induction` tactic | implemented (`examples/induction.lean`): dependent motive, IH typed at the recursive sub-term.  Non-indexed inductives only.  Works for Nat, Bool (no-rec), List, …  Subgoal-local intros chained through further `apply`s + `exact <fvar>` work too (wrap deferred to end-of-seq) |
 | `revert` tactic | not implemented | inverse of `intro`; needs careful FVar→BVar conversion of the goal |
 | Full `match` syntax in `def` (`def f \| 0 => 0 \| succ k => k`) | not implemented | needs equation compiler |
 | Match on indexed inductives with recursive ctors (`Vec.cons`, `Nat.le.step`) | not implemented | needs IH-motive-application logic that threads per-rec-arg index expressions |
@@ -617,12 +617,6 @@ Pieces ordered by impact and tractability:
 2. **More tactics** — `rewrite` (`5380a78`), `cases` v1+v2 (`282e66d`,
    `bcfcd73`), and `induction` (this iteration) are in.  Next: `simp`
    (rewrite using an equation database), `revert` (inverse of `intro`).
-   Also: the subgoal-local-intros wrap-before-meta-resolves bug — when
-   the user writes `apply f; intro x; exact x` inside a subgoal *and*
-   `f` itself produces a further subgoal, the `x` in `exact x` ends up
-   free because wrap closes only the surface, not into the unresolved
-   inner meta.  Fix: defer subgoal-local intro wrapping until all
-   subgoals are solved (mirror what `main_intros` already does).
 
 3. **More Decidable instances** — `And` / `Or` / `Not` (`decidable_compose.lean`),
    `Nat.decEq` (`nat_dec_eq.lean`) and `Bool.decEq` (`bool_dec_eq.lean`) are

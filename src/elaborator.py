@@ -1193,6 +1193,16 @@ class Elaborator:
         main_intros: List[Tuple[str, Expr, str]] = []
         main_term: Optional[Expr] = None
         pending: List[Tuple[int, Expr, tuple]] = []
+        # Subgoal-local intros that need to be Lam-wrapped + closed once
+        # all subgoals are solved.  We can't wrap immediately because the
+        # subgoal-solving term may contain unresolved inner metas, and
+        # close() only walks the surface — it doesn't reach into a Meta
+        # node, so FVars that get substituted in later would slip out
+        # unclosed.  Each entry is (meta_id, intros, raw_term).  Processed
+        # in reverse chronological order at end so inner deferred wraps
+        # resolve before outer ones reference them.
+        deferred_subgoal_wraps: List[
+            Tuple[int, List[Tuple[str, Expr, str]], Expr]] = []
         try:
             for tac in tacs:
                 if focused_goal is None:
@@ -1221,14 +1231,18 @@ class Elaborator:
                     main_term = term
                     focused_intros = []
                 else:
-                    # Wrap subgoal-local intros into Lams now.
-                    for name, dom, fv in reversed(focused_intros):
-                        term = Lam(name, dom,
-                                   close(self.mctx.instantiate(term), fv))
-                        ctx.pop()
-                    focused_intros = []
-                    self.mctx.assign(focused_meta_id,
-                                     self.mctx.instantiate(term))
+                    if focused_intros:
+                        # Defer the wrap.  We don't assign the meta yet;
+                        # it stays unsolved until the post-seq processing
+                        # loop below — at which point any inner metas
+                        # have already been resolved, and instantiate +
+                        # close together produce a fully-closed Lam.
+                        deferred_subgoal_wraps.append(
+                            (focused_meta_id, focused_intros[:], term))
+                        focused_intros = []
+                    else:
+                        self.mctx.assign(focused_meta_id,
+                                         self.mctx.instantiate(term))
                 # Prepend new subgoals (depth-first).
                 new_pending: List[Tuple[int, Expr, tuple]] = []
                 for sub in sub_metas:
@@ -1266,6 +1280,15 @@ class Elaborator:
                     f"{show_expr(self.mctx.instantiate(m_ty))}")
             if main_term is None:
                 raise ElabError("seq has only intros, no body tactic")
+            # Process deferred subgoal-local intro wraps in reverse order
+            # (inner-first), so each outer entry's term has its inner
+            # metas already resolved by the time we instantiate + close.
+            for meta_id, intros, term in reversed(deferred_subgoal_wraps):
+                term = self.mctx.instantiate(term)
+                for name, dom, fv in reversed(intros):
+                    term = Lam(name, dom,
+                               close(self.mctx.instantiate(term), fv))
+                self.mctx.assign(meta_id, self.mctx.instantiate(term))
             # Final wrap: instantiate fully, then close main's intros.
             result = self.mctx.instantiate(main_term)
             for name, dom, fv in reversed(main_intros):

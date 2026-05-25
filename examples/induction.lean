@@ -21,11 +21,8 @@ theorem zero_add_by_induction (n : Nat) : Eq.{1} Nat (Nat.add 0 n) n :=
      -- step case: subgoal of type Π k, Π ih : 0+k=k, 0 + succ k = succ k
      intro k; intro ih;
      -- 0 + succ k def-reduces to succ (0 + k); by ih it = succ k.
-     -- (We write `exact (lift_succ … ih)` rather than `apply lift_succ; exact ih`
-     -- because the seq interpreter wraps subgoal-local intros into Lams at
-     -- the apply site, before the inner subgoal is solved — a chained
-     -- apply ... ; exact ih leaves the inner ih reference un-closed.  TODO.)
-     exact (lift_succ (Nat.add 0 k) k ih)
+     apply lift_succ;
+     exact ih
 
 example : Eq.{1} Nat (Nat.add 0 5) 5 := zero_add_by_induction 5
 
@@ -97,4 +94,26 @@ example :
           (List.cons.{1} Nat 3 (List.nil.{1} Nat))))
       3 :=
   Eq.refl.{1} Nat 3
+
+-- ============================================================
+-- succ_add via induction.  Same theorem math.lean proves with a hand-
+-- written Nat.rec; here we drive it with `induction` + the
+-- `apply lift_succ; exact ih` pattern (which would historically have
+-- lost `ih` under the eager wrap design).  An outer FVar `m` plus the
+-- subgoal-local `k`, `ih` exercises the close-at-the-right-depth path.
+-- ============================================================
+
+theorem succ_add_by_induction (m n : Nat) :
+    Eq.{1} Nat (Nat.add (Nat.succ m) n) (Nat.succ (Nat.add m n)) :=
+  by induction n;
+     -- base: succ m + 0 = succ (m + 0) — both sides def-reduce to succ m.
+     apply Eq.refl;
+     -- step: ih : succ m + k = succ (m + k).
+     -- Goal: succ m + succ k = succ (m + succ k)
+     --   ≡ succ (succ m + k) = succ (succ (m + k))    [def]
+     --   ≡ succ X = succ Y    where X = succ m + k, Y = succ (m + k)
+     -- By IH X = Y, so lift_succ + exact ih.
+     intro k; intro ih;
+     apply lift_succ;
+     exact ih
 
