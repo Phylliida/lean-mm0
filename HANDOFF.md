@@ -11,10 +11,10 @@ trust boundary.
 
 | | |
 |---|---|
-| Tests | **106 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 39 parser examples) |
-| Total source | ~6.7 kLoC Python + 188 LoC MM0 prelude + 1631 LoC `.lean` examples (39 files) |
+| Tests | **107 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 40 parser examples) |
+| Total source | ~6.7 kLoC Python + 188 LoC MM0 prelude + 1761 LoC `.lean` examples (40 files) |
 | Trusted base | `src/mm0_verify.py` (710 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 48+ commits on `master`; clean working tree |
+| Repo | 50+ commits on `master`; clean working tree |
 
 ## What the pipeline does
 
@@ -236,6 +236,9 @@ ba6b135  Theorem class + opaque-def in verifier; rewrite β-normalises goal
 5ab3f07  Nat mul algebra (succ_mul, mul_comm, left_distrib, mul_assoc, right_distrib)
 b60b6b2  HANDOFF: opaque-def + Theorem + Nat mul algebra
 6569c95  induction tactic (dependent-motive cases) + examples
+0ff0ce5  HANDOFF: induction tactic landed
+e81603d  Defer subgoal-local intro wraps (real fix)
+(next)   Nat.le ordering lemmas via the new induction tactic
 ```
 
 ### `383b984` — initial commit
@@ -607,12 +610,15 @@ up" below.
 
 Pieces ordered by impact and tractability:
 
-1. **More Nat algebra** — `add_zero`, `mul_zero`, `mul_one`, `add_assoc`,
-   `zero_mul`, `one_mul` (`nat_lemmas.lean`) and `succ_mul`, `mul_comm`,
-   `left_distrib`, `mul_assoc`, `right_distrib`, `add_left_comm`
-   (`nat_mul.lean`) are done.  Open: `Nat.le` ordering lemmas (transitivity
-   already in `nat_le.lean`; add `le_succ`, `succ_le_succ`, `lt_irrefl`,
-   `le_antisymm`).  Integer arithmetic if the prelude grows Int proofs.
+1. **More Nat algebra / ordering** — `add_zero`, `mul_zero`, `mul_one`,
+   `add_assoc`, `zero_mul`, `one_mul` (`nat_lemmas.lean`); `succ_mul`,
+   `mul_comm`, `left_distrib`, `mul_assoc`, `right_distrib`,
+   `add_left_comm` (`nat_mul.lean`); `le_refl`, `le_trans`
+   (`nat_le.lean`); `le_succ`, `le_succ_of_le`, `zero_le`,
+   `succ_le_succ`, `lt_succ_self`, `lt_succ_of_lt`, `le_of_lt`
+   (`nat_le_more.lean`) are done.  Open: `le_antisymm`, `lt_irrefl`,
+   `le_total` (these last few want indexed-inductive case analysis,
+   which is the next engine fix — see item 4).
 
 2. **More tactics** — `rewrite` (`5380a78`), `cases` v1+v2 (`282e66d`,
    `bcfcd73`), and `induction` (this iteration) are in.  Next: `simp`
