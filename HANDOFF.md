@@ -646,8 +646,9 @@ Pieces ordered by impact and tractability:
 
 2. **More Decidable instances** — `And` / `Or` / `Not`, `Nat.decEq`,
    `Bool.decEq`, mono + polymorphic `List.decEq`, `Nat.decLe`,
-   `Nat.decLt` are done.  Open: `Decidable (a ∈ xs)` for lists
-   (needs a List membership predicate first).
+   `Nat.decLt`, `List.decMem` (`list_mem.lean`) are done.  Open: a
+   `DecidableEq α` class so `List.decMem` doesn't need a manual
+   eq-decision function arg.
 
 3. **`simp` upgrades** — current `simp` is MVP-ish: it iterates rewrites
    from an `@[simp]` database + extras, unifies LHS against goal

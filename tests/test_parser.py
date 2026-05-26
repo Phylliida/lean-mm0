@@ -221,6 +221,13 @@ def test_parse_and_verify_have():
     _run_example("math.lean", "have.lean")
 
 
+def test_parse_and_verify_list_mem():
+    # List membership + Decidable.  Uses Nat.decEq from nat_dec_eq,
+    # instDecidableOr from decidable_compose.
+    _run_example("nat_inj.lean", "nat_dec_eq.lean",
+                 "decidable_compose.lean", "list_mem.lean")
+
+
 def test_parse_and_verify_revert():
     # revert example uses zero_add, succ_add, lift_succ from
     # math.lean / nat_lemmas.lean.
