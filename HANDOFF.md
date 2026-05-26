@@ -11,10 +11,10 @@ outside the trust boundary.
 
 | | |
 |---|---|
-| Tests | **118 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 51 parser examples) |
-| Total source | ~7.0 kLoC Python + 188 LoC MM0 prelude + 2976 LoC `.lean` examples (51 files) |
+| Tests | **119 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 52 parser examples) |
+| Total source | ~7.5 kLoC Python + 188 LoC MM0 prelude + 3017 LoC `.lean` examples (52 files) |
 | Trusted base | `src/mm0_verify.py` (710 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 67 commits on `master`; clean working tree |
+| Repo | 69 commits on `master`; clean working tree |
 
 ## What the pipeline does
 
@@ -77,12 +77,12 @@ lean-mm0/
 │   │                   instance synth (backtracking), tactics
 │   ├── emitter.py      kernel derivation → MM0 proof text
 │   └── mm0_verify.py   ← TRUSTED: MM0 s-expression verifier (710 LoC)
-├── examples/           51 .lean files (2976 LoC) that compile + verify
+├── examples/           52 .lean files (3017 LoC) that compile + verify
 ├── tests/
 │   ├── test_kernel_smoke.py   (7 tests)
 │   ├── test_emit_basic.py     (3 tests)
 │   ├── suite.py               (57 tests across 14 categories)
-│   └── test_parser.py         (51 .lean examples, each round-tripped)
+│   └── test_parser.py         (52 .lean examples, each round-tripped)
 └── run_all.py          single entry point: runs all 4 test files
 ```
 
@@ -189,7 +189,7 @@ accept something false — only reject something true.
 
 ## What's been built (chronological)
 
-67 commits — feature commits + HANDOFF updates interleaved:
+69 commits — feature commits + HANDOFF updates interleaved:
 
 ```
 383b984  Initial commit: lean-mm0 prototype
@@ -261,6 +261,8 @@ dfd669d  Nat ordering chain: pred_le_pred → lt_irrefl → le_antisymm
 7b21dbd  Nat.le_total: total order via double induction + cases on Or
 db70aac  HANDOFF: refresh after le_total
 07cd03f  Nat.decLe / Nat.decLt + min via if (instance synthesis works)
+5eb908f  HANDOFF: refresh counts after Nat.decLe commit
+f8bf1d2  have tactic: deferred Let-wrap interleaved with intros
 ```
 
 ### `383b984` — initial commit
