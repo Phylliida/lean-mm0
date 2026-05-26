@@ -209,6 +209,10 @@ def test_parse_and_verify_list_theorems():
                  "list_theorems.lean")
 
 
+def test_parse_and_verify_simp():
+    _run_example("math.lean", "nat_lemmas.lean", "simp.lean")
+
+
 def test_parse_and_verify_nat_mul():
     _run_example("math.lean", "nat_lemmas.lean", "nat_mul.lean")
 

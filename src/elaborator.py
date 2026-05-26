@@ -1274,6 +1274,96 @@ class Elaborator:
             ctx_snap = tuple(ctx.entries)
             return term, [(sub_meta.id, ctx_snap)]
 
+        if kind == "simp":
+            # `simp [e1, e2, …]`: iterate the rewrite tactic with the
+            # listed Eq proofs until no equation matches the goal, then
+            # try rfl.  If rfl closes the goal, the simp is fully
+            # discharged; otherwise the simplified goal becomes a
+            # subgoal for the user.
+            _, exprs, _bvar_stack = tac
+            # Elaborate each equation up front.
+            eqs: List[Tuple[Expr, Expr, Expr, Expr, "Level"]] = []
+            for expr in exprs:
+                expr_r = _resolve_bvars(expr, ctx)
+                h_elab, h_ty = self.elab(expr_r, None, ctx)
+                h_ty_w = self.kernel.whnf(
+                    self.mctx.instantiate(h_ty), ctx)
+                head_h, args_h = _spine(h_ty_w)
+                if not (isinstance(head_h, Const)
+                        and head_h.name == "Eq"
+                        and len(args_h) == 3):
+                    raise ElabError(
+                        f"simp: every entry must be an Eq proof; "
+                        f"{show_expr(expr)} has type "
+                        f"{show_expr(h_ty_w)}")
+                α, a, b = args_h
+                eqs.append((h_elab, α, a, b, head_h.levels[0]))
+            G = _beta_norm(self.mctx.instantiate(goal))
+            G_ty_w = self.kernel.whnf(
+                self.mctx.instantiate(self._infer_elaborated(G, ctx)),
+                ctx)
+            if not isinstance(G_ty_w, Sort):
+                raise ElabError(
+                    f"simp: goal's type is not a Sort: "
+                    f"{show_expr(G_ty_w)}")
+            v_level = G_ty_w.level
+            # Each iteration tries every equation until one fires; if
+            # none fires we stop.  Bounded to avoid loops on bad simp
+            # sets (e.g. `comm` lemmas oscillating).
+            MAX_SIMP_ITERS = 200
+            current_goal = G
+            rewrites: List[Tuple[Expr, Expr, Expr, Expr, "Level", Expr]] = []
+            for _ in range(MAX_SIMP_ITERS):
+                progressed = False
+                for h_elab, α, a, b, u_lvl in eqs:
+                    new_goal_attempt, occurred = _replace_term(
+                        current_goal, a, b)
+                    if occurred:
+                        rewrites.append(
+                            (h_elab, α, a, b, u_lvl, current_goal))
+                        current_goal = new_goal_attempt
+                        progressed = True
+                        break
+                if not progressed:
+                    break
+            # Try rfl on current_goal.
+            current_w = self.kernel.whnf(
+                self.mctx.instantiate(current_goal), ctx)
+            ghead, gargs = _spine(current_w)
+            rfl_closed = False
+            final_term: Expr
+            subgoals_out: list = []
+            if (isinstance(ghead, Const) and ghead.name == "Eq"
+                    and len(gargs) == 3
+                    and self.kernel.def_eq(gargs[1], gargs[2], ctx)):
+                rfl_closed = True
+                final_term = App(App(Const("Eq.refl", ghead.levels),
+                                      gargs[0]), gargs[1])
+            else:
+                sub_meta = self.mctx.fresh(current_goal)
+                final_term = sub_meta
+                ctx_snap = tuple(ctx.entries)
+                subgoals_out.append((sub_meta.id, ctx_snap))
+            # Wrap each rewrite in reverse — innermost wraps the final
+            # term, outermost wraps the whole stack and has type =
+            # original goal.
+            for h_elab, α, a, b, u_lvl, pre_goal in reversed(rewrites):
+                pre_shifted = shift(pre_goal, 2)
+                replaced_motive, _ = _replace_term(
+                    pre_shifted, shift(a, 2), BVar(1))
+                inner_lam = Lam(
+                    "_hp",
+                    App(App(App(Const("Eq", (u_lvl,)), shift(α, 1)),
+                            shift(b, 1)), BVar(0)),
+                    replaced_motive)
+                motive_full = Lam("a'", α, inner_lam)
+                sym_h = App(App(App(App(
+                    Const("Eq.symm", (u_lvl,)), α), a), b), h_elab)
+                final_term = App(App(App(App(App(App(
+                    Const("Eq.rec", (u_lvl, v_level)),
+                    α), b), motive_full), final_term), a), sym_h)
+            return final_term, subgoals_out
+
         if kind == "intro":
             # Standalone intro outside a seq has no body to wrap.
             raise ElabError(

@@ -80,7 +80,7 @@ KEYWORDS = {"def", "axiom", "theorem", "example", "instance",
             "fun", "lam", "let", "in",
             "Sort", "Type", "Prop", "forall", "match", "with", "where",
             "by", "exact", "rfl", "intro", "apply", "assumption",
-            "rewrite", "rw", "cases", "induction", "revert",
+            "rewrite", "rw", "cases", "induction", "revert", "simp",
             "if", "then", "else",
             "->", "=>", ":=", ":", ",", ";",
             "(", ")", ".{", "}", "|", "[", "]"}
@@ -138,7 +138,7 @@ def lex(src: str) -> List[Tok]:
                                     "forall", "match", "with", "where",
                                     "by", "exact", "rfl", "intro",
                                     "apply", "assumption",
-                                    "rewrite", "rw", "cases", "induction", "revert",
+                                    "rewrite", "rw", "cases", "induction", "revert", "simp",
                                     "if", "then", "else"} else "id"
             out.append(Tok(kind, text, i)); i = j; continue
         raise SyntaxError(f"unexpected character {c!r} at {i}")
@@ -868,6 +868,19 @@ class P:
             if name_tok.kind != "id":
                 raise SyntaxError("revert expects a name")
             return ("revert", name_tok.text)
+        if t.text == "simp":
+            # simp [e1, e2, ...] — iterate rewriting with the listed Eq
+            # proofs until fixpoint, then try rfl.
+            self.take()
+            self.eat("[")
+            eqs: List[Expr] = []
+            if not self.at("]"):
+                eqs.append(self.parse_expr(lvl_params, bvar_stack))
+                while self.at(","):
+                    self.take()
+                    eqs.append(self.parse_expr(lvl_params, bvar_stack))
+            self.eat("]")
+            return ("simp", eqs, list(bvar_stack))
         if t.text == "intro":
             self.take()
             name_tok = self.take()
