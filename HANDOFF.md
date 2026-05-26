@@ -648,9 +648,11 @@ Pieces ordered by impact and tractability:
 
 2. **More Decidable instances** — `And` / `Or` / `Not`, `Nat.decEq`,
    `Bool.decEq`, mono + polymorphic `List.decEq`, `Nat.decLe`,
-   `Nat.decLt`, `List.decMem` (`list_mem.lean`) are done.  Open: a
-   `DecidableEq α` class so `List.decMem` doesn't need a manual
-   eq-decision function arg.
+   `Nat.decLt`, `List.decMem`, `DecidableEq` class + `Nat` instance +
+   class-driven `List.decMem_cls` (`decidable_eq.lean`) are done.
+   Open: instance for `Bool` and other base types; once those exist,
+   register a `DecidableEq α → DecidableEq (List α)` instance to chain
+   List equality.
 
 3. **`simp` upgrades** — current `simp` is MVP-ish: it iterates rewrites
    from an `@[simp]` database + extras, unifies LHS against goal
