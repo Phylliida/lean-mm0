@@ -11,10 +11,10 @@ outside the trust boundary.
 
 | | |
 |---|---|
-| Tests | **114 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 47 parser examples) |
-| Total source | ~7.0 kLoC Python + 188 LoC MM0 prelude + 2618 LoC `.lean` examples (47 files) |
+| Tests | **115 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 48 parser examples) |
+| Total source | ~7.0 kLoC Python + 188 LoC MM0 prelude + 2691 LoC `.lean` examples (48 files) |
 | Trusted base | `src/mm0_verify.py` (710 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 59 commits on `master`; clean working tree |
+| Repo | 60 commits on `master`; clean working tree |
 
 ## What the pipeline does
 
@@ -77,12 +77,12 @@ lean-mm0/
 │   │                   instance synth (backtracking), tactics
 │   ├── emitter.py      kernel derivation → MM0 proof text
 │   └── mm0_verify.py   ← TRUSTED: MM0 s-expression verifier (710 LoC)
-├── examples/           47 .lean files (2618 LoC) that compile + verify
+├── examples/           48 .lean files (2691 LoC) that compile + verify
 ├── tests/
 │   ├── test_kernel_smoke.py   (7 tests)
 │   ├── test_emit_basic.py     (3 tests)
 │   ├── suite.py               (57 tests across 14 categories)
-│   └── test_parser.py         (47 .lean examples, each round-tripped)
+│   └── test_parser.py         (48 .lean examples, each round-tripped)
 └── run_all.py          single entry point: runs all 4 test files
 ```
 
@@ -188,7 +188,7 @@ accept something false — only reject something true.
 
 ## What's been built (chronological)
 
-59 commits — feature commits + HANDOFF updates interleaved:
+60 commits — feature commits + HANDOFF updates interleaved:
 
 ```
 383b984  Initial commit: lean-mm0 prototype
@@ -250,6 +250,8 @@ b72c7ed  List.decEq for List Nat + no-confusion helpers
 3d3ab7c  simp tactic (MVP): iterate rewrites with given lemmas, try rfl
 d9765ce  @[simp] attribute + env-collected lemma database + unify match
 d20de9c  Index unification for induction + name-based tactic-arg resolution
+8ec2b9c  HANDOFF: comprehensive refresh after index-unif + simp + name-resolver
+(next)   Indexed-inductive match v2: recursive ctors (Nat.le.step, Vec.cons)
 ```
 
 ### `383b984` — initial commit
@@ -607,7 +609,7 @@ Compared to a production Lean / mathlib stack, the major missing pieces:
 | `revert` tactic | implemented (`examples/revert.lean`) — `revert h` pulls an intro back into the goal as a leading Π.  Naturally pairs with `induction` to generalise a hypothesis before inducting on another | — |
 | `simp` tactic | implemented (`examples/simp.lean`): `simp [extras]` uses env-collected `@[simp]` lemmas + extras; peels Π binders into metas; unifies LHS against goal subterms; iterates to fixpoint and tries `rfl` | No congruence rules and no simp normal-form heuristics — significant additional infra |
 | Full `match` syntax in `def` (`def f \| 0 => 0 \| succ k => k`) | not implemented | needs equation compiler |
-| Match on indexed inductives with recursive ctors (`Vec.cons`, `Nat.le.step`) | not implemented (the indexed-match v1 handles only non-recursive ctors) | IH-motive-application logic must thread per-rec-arg index expressions |
+| Match on indexed inductives with recursive ctors (`Vec.cons`, `Nat.le.step`) | implemented (`examples/idx_match_rec.lean`).  IH binder is auto-wrapped after the field binders with type `motive idx_for_rec rec_field` — index values come from the recursor rule's `rec_index_templates`.  Both non-IH-using and structurally-recursive RHSs work | — |
 | Mutual inductives w/ cross-recursor | partial (constructors only) | needs the "tag-encoding" pass |
 | Notation/macro system | minimal (only `infix*`) | real Lean macros are a programmable language; a useful subset (mixfix `notation`) is tractable |
 | Proof irrelevance | axiom in prelude; not auto-applied | needs type-aware def-eq |
@@ -630,20 +632,13 @@ Pieces ordered by impact and tractability:
    `induction` + index unification), then `lt_irrefl`, `le_antisymm`,
    `le_total` follow naturally.  Probably ~1 page each.
 
-2. **Indexed-inductive match v2 (recursive ctors)** — extend the v1
-   indexed match to handle `Nat.le.step`, `Vec.cons`, etc.  Needs the
-   IH-motive-application logic to thread per-rec-arg index expressions
-   (we have the templates in `IotaRule.rec_index_templates`).  Would
-   let users pattern-match these via `match` instead of always going
-   through hand-rolled `Nat.le.rec`.
-
-3. **More Decidable instances** — `And` / `Or` / `Not`, `Nat.decEq`,
+2. **More Decidable instances** — `And` / `Or` / `Not`, `Nat.decEq`,
    `Bool.decEq`, mono + polymorphic `List.decEq` are done.  Open:
    `Decidable (Nat.le a b)`, `Decidable (Nat.lt a b)` — would need
    `pred_le_pred` (item 1) as a building block.  Then `Decidable
    (a ∈ xs)` for lists.
 
-4. **`simp` upgrades** — current `simp` is MVP-ish: it iterates rewrites
+3. **`simp` upgrades** — current `simp` is MVP-ish: it iterates rewrites
    from an `@[simp]` database + extras, unifies LHS against goal
    subterms, tries `rfl`.  Real simp adds: congruence rules (rewrite
    inside ANY position, including binders), normal-form heuristics,
@@ -651,23 +646,23 @@ Pieces ordered by impact and tractability:
    filling), unfolding of selected defs.  Substantial, but each piece
    is bounded.
 
-5. **Auto-revert for `induction`** — when a hypothesis depends on the
+4. **Auto-revert for `induction`** — when a hypothesis depends on the
    thing we're inducting over, Lean's `induction` auto-reverts it so
    the abstraction works.  We currently require the user to `revert`
    manually before `induction`.  Adding auto-revert would let
    `le_antisymm` (which has `h2 : Nat.le m n` alongside the `h1` we
    induct on, where both `m` and `n` are FVars) be written naturally.
 
-6. **Notation/macro system** — Generalise `infix` to arbitrary mixfix
+5. **Notation/macro system** — Generalise `infix` to arbitrary mixfix
    notation like `notation:50 "[" a "," b "]" => Prod.mk a b`.
    Needs a more flexible token-pattern parser.  Would dramatically
    improve example readability.
 
-7. **Mutual inductives' cross-recursor** — Compile mutual `inductive`
+6. **Mutual inductives' cross-recursor** — Compile mutual `inductive`
    blocks to a single tag-discriminated inductive, generate a
    cross-recursor.  Substantial.
 
-8. **Lean elaborator-compat layer** — Read actual `.lean` files from
+7. **Lean elaborator-compat layer** — Read actual `.lean` files from
    Lean 4 source by being more permissive about syntax (newlines as
    separators, more notation forms).  Real Lean files require
    elaborator features that aren't trivially in scope, but a useful

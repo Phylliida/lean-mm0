@@ -1147,18 +1147,6 @@ def _compile_match(scrutinee: Expr, result_ty: Expr,
             raise SyntaxError(
                 f"match on indexed inductive {ind_name} requires "
                 f"(motive := ...)")
-        # No-recursive-fields check: indexed recursors with rec-args
-        # need indices for each rec call too, which the current minor
-        # builder doesn't supply.
-        for cn in ind_decl.constructor_names:
-            cd = env.get(cn)
-            r = next((rule for rule in rec_decl.rules
-                      if rule.ctor_name == cn), None)
-            if r is not None and r.rec_arg_positions:
-                raise SyntaxError(
-                    f"match on indexed inductive {ind_name} with "
-                    f"recursive ctor {cn} not yet supported (use the "
-                    f"recursor directly)")
 
     # Determine the scrutinee's type: prefer the hint (from the
     # surrounding def's binder annotation) over running the kernel,
@@ -1278,17 +1266,34 @@ def _compile_match(scrutinee: Expr, result_ty: Expr,
                 ih_bvar_idx = n_rec - 1 - k
                 minor_body = _replace_fvar_with_bvar(
                     minor_body, sent_name, ih_bvar_idx)
-        # wrap IH binders (innermost first): r_{n-1}, ..., r_0
-        # IH type for r_k = motive (field_{rec_positions[k]})
-        # When we're about to wrap r_k, the inner body has (n_rec - 1 - k) r-binders below.
-        # field_p sits at BVar( (n_rec - 1 - k) + (n_fields - 1 - p) )
-        # motive applied to that field gives the IH type.
+        # wrap IH binders (innermost first): r_{n_rec-1}, ..., r_0.
+        # Final minor shape: λf_0..f_{n_fields-1}. λr_0..r_{n_rec-1}. body.
+        # At the dom slot of `λr_k`, the surrounding context (after all
+        # subsequent wraps) is `λf_0..f_{n_fields-1}. λr_0..r_{k-1}.[HERE]`,
+        # i.e. n_fields + k binders above.  Field p therefore sits at
+        # BVar(k + n_fields - 1 - p), and motive must shift by n_fields + k.
+        #
+        # For *indexed* inductives the IH type is `motive idx_0..idx_{ni-1}
+        # rec_field`, where idx values come from
+        # rec_rule.rec_index_templates[k].  Templates are in the ctor's
+        # field-binder convention (BVar(0)=last field), so to land them
+        # in the IH dom-slot they shift by k (same offset as field BVars).
+        rec_index_templates = (rec_rule.rec_index_templates
+                               if rec_rule and ind_decl.num_indices > 0
+                               else ())
         n_fields = cd.num_fields
         for k in reversed(range(n_rec)):
             p = rec_positions[k]
-            depth_to_field = (n_rec - 1 - k) + (n_fields - 1 - p)
-            ih_ty = App(_se(motive, n_rec - 1 - k + n_fields, 0),
-                        BVar(depth_to_field))
+            depth_to_field = k + (n_fields - 1 - p)
+            if rec_index_templates:
+                ih_idx_vals = [_se(t, k, 0)
+                               for t in rec_index_templates[k]]
+            else:
+                ih_idx_vals = []
+            ih_ty = _se(motive, n_fields + k, 0)
+            for v in ih_idx_vals:
+                ih_ty = App(ih_ty, v)
+            ih_ty = App(ih_ty, BVar(depth_to_field))
             minor_body = Lam(f"r{k}", ih_ty, minor_body)
         # wrap field binders.  field_types[j] was extracted from the
         # already-peeled ctor type (each iter goes one binder deeper into
