@@ -79,7 +79,7 @@ KEYWORDS = {"def", "axiom", "theorem", "example", "instance",
             "infix", "infixl", "infixr",
             "fun", "lam", "let", "in",
             "Sort", "Type", "Prop", "forall", "match", "with", "where",
-            "by", "exact", "rfl", "intro", "apply", "assumption",
+            "by", "exact", "rfl", "intro", "have", "apply", "assumption",
             "rewrite", "rw", "cases", "induction", "revert", "simp",
             "if", "then", "else",
             "->", "=>", ":=", ":", ",", ";",
@@ -136,7 +136,7 @@ def lex(src: str) -> List[Tok]:
                                     "fun", "lam", "let", "in",
                                     "Sort", "Type", "Prop",
                                     "forall", "match", "with", "where",
-                                    "by", "exact", "rfl", "intro",
+                                    "by", "exact", "rfl", "intro", "have",
                                     "apply", "assumption",
                                     "rewrite", "rw", "cases", "induction", "revert", "simp",
                                     "if", "then", "else"} else "id"
@@ -840,6 +840,8 @@ class P:
         def _update_stack(stack: list, tac: tuple) -> list:
             if tac[0] == "intro":
                 return stack + [tac[1]]
+            if tac[0] == "have":
+                return stack + [tac[1]]
             if tac[0] == "revert":
                 # Remove the LAST occurrence of the name (so subsequent
                 # `intro x` followed by `revert x` cancel out correctly).
@@ -923,6 +925,20 @@ class P:
             # subgoals from later tactics (e.g. `apply`) unable to be
             # solved by anything after the intro.
             return ("intro", name_tok.text)
+        if t.text == "have":
+            # `have h : T := e` — push (h, T) onto ctx with value e, then
+            # continue with the rest of the seq.  At end of seq the term
+            # gets a `let h : T := e in <term>` wrap around the whole
+            # main term (in chronological order with any intros).
+            self.take()
+            name_tok = self.take()
+            if name_tok.kind != "id":
+                raise SyntaxError("have expects a name")
+            self.eat(":")
+            ty = self.parse_expr(lvl_params, bvar_stack)
+            self.eat(":=")
+            val = self.parse_expr(lvl_params, bvar_stack)
+            return ("have", name_tok.text, ty, val, list(bvar_stack))
         raise SyntaxError(f"unknown tactic {t.text!r}")
 
     def parse_level(self, lvl_params: Tuple[str, ...]) -> Level:

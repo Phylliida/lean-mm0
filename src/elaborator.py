@@ -794,7 +794,8 @@ class Elaborator:
 
     def _run_tactic(self, tac: tuple, goal: Expr,
                     ctx: LocalCtx,
-                    focused_intros: Optional[list] = None
+                    focused_intros: Optional[list] = None,
+                    focused_order: Optional[list] = None,
                     ) -> Tuple[Expr, List[int]]:
         kind = tac[0]
         if kind == "rfl":
@@ -1099,6 +1100,8 @@ class Elaborator:
                     if focused_intros[fi][2] == fv_name:
                         del focused_intros[fi]
                         break
+                if focused_order is not None and fv_name in focused_order:
+                    focused_order.remove(fv_name)
             # Compute the inductive's index types up front so we know
             # T_i for every concrete index that needs unification.
             if n_indices > 0:
@@ -1590,22 +1593,35 @@ class Elaborator:
         focused_meta_id: Optional[int] = None
         focused_goal = goal
         focused_intros: List[Tuple[str, Expr, str]] = []
-        # Main goal's intros are pushed onto ctx but NOT popped until the
-        # very end — that way subgoal-solving terms can reference them as
-        # FVars and the final close() unifies everything.
+        # focused_haves parallels focused_intros for `have h : T := e`
+        # bindings.  Entries are (name, type, value, fv) — the fv has a
+        # value-bearing ctx entry so the kernel ζ-reduces references.
+        focused_haves: List[Tuple[str, Expr, Expr, str]] = []
+        # focused_order records chronology by FVar name so the final
+        # wrap can interleave Lam (for intros) and Let (for haves)
+        # correctly.  Storing fv names (not list indices) means revert's
+        # remove-by-fv-name keeps everything consistent without
+        # reindexing.
+        focused_order: List[str] = []
+        # Main goal's intros/haves are pushed onto ctx but NOT popped
+        # until the very end — that way subgoal-solving terms can
+        # reference them as FVars and the final close() unifies
+        # everything.
         main_intros: List[Tuple[str, Expr, str]] = []
+        main_haves: List[Tuple[str, Expr, Expr, str]] = []
+        main_order: List[str] = []
         main_term: Optional[Expr] = None
         pending: List[Tuple[int, Expr, tuple]] = []
-        # Subgoal-local intros that need to be Lam-wrapped + closed once
-        # all subgoals are solved.  We can't wrap immediately because the
+        # Subgoal-local intros/haves that need wrapping once all
+        # subgoals are solved.  We can't wrap immediately because the
         # subgoal-solving term may contain unresolved inner metas, and
         # close() only walks the surface — it doesn't reach into a Meta
         # node, so FVars that get substituted in later would slip out
-        # unclosed.  Each entry is (meta_id, intros, raw_term).  Processed
-        # in reverse chronological order at end so inner deferred wraps
-        # resolve before outer ones reference them.
+        # unclosed.  Each entry is (meta_id, intros, haves, order, raw_term).
+        # Processed in reverse chronological order at end so inner
+        # deferred wraps resolve before outer ones reference them.
         deferred_subgoal_wraps: List[
-            Tuple[int, List[Tuple[str, Expr, str]], Expr]] = []
+            Tuple[int, list, list, list, Expr]] = []
         try:
             for tac in tacs:
                 if focused_goal is None:
@@ -1622,7 +1638,24 @@ class Elaborator:
                     dom = goal_w.dom
                     fv = ctx.push(name, dom)
                     focused_intros.append((name, dom, fv))
+                    focused_order.append(fv)
                     focused_goal = open_(goal_w.body, FVar(fv, dom))
+                    continue
+                if tac[0] == "have":
+                    # `have h : T := e` — elaborate T and e (against T),
+                    # push (h, T, e) onto ctx as a let-binding, and
+                    # continue.  At end of seq the term gets a `Let`
+                    # wrap around it (in chronological order with intros).
+                    _, h_name, ty_raw, val_raw, h_bvar_stack = tac
+                    ty_r = _resolve_bvars_named(ty_raw, h_bvar_stack, ctx)
+                    val_r = _resolve_bvars_named(val_raw, h_bvar_stack, ctx)
+                    ty_e, _ = self.elab(ty_r, None, ctx)
+                    ty_e = self.mctx.instantiate(ty_e)
+                    val_e, _ = self.elab(val_r, ty_e, ctx)
+                    val_e = self.mctx.instantiate(val_e)
+                    fv = ctx.push(h_name, ty_e, val_e)
+                    focused_haves.append((h_name, ty_e, val_e, fv))
+                    focused_order.append(fv)
                     continue
                 if tac[0] == "revert":
                     # Anti-intro: find the named intro in focused_intros,
@@ -1662,6 +1695,7 @@ class Elaborator:
                             f"(internal error)")
                     del ctx.entries[pop_idx]
                     del focused_intros[target_idx]
+                    focused_order.remove(rev_fv)
                     focused_goal = Pi(
                         rev_name, rev_dom,
                         close(focused_goal, rev_fv, 0))
@@ -1671,24 +1705,33 @@ class Elaborator:
                 # can prune the list when it pulls an intro back into G.
                 term, sub_metas = self._run_tactic(
                     tac, focused_goal, ctx,
-                    focused_intros=focused_intros)
+                    focused_intros=focused_intros,
+                    focused_order=focused_order)
                 term = self.mctx.instantiate(term)
                 if focused_is_main:
-                    # Defer wrapping the main intros — leave them pushed
-                    # so later subgoal solutions can use them as FVars.
+                    # Defer wrapping the main intros + haves — leave
+                    # them pushed so later subgoal solutions can use
+                    # them as FVars.
                     main_intros = focused_intros[:]
+                    main_haves = focused_haves[:]
+                    main_order = focused_order[:]
                     main_term = term
                     focused_intros = []
+                    focused_haves = []
+                    focused_order = []
                 else:
-                    if focused_intros:
+                    if focused_intros or focused_haves:
                         # Defer the wrap.  We don't assign the meta yet;
                         # it stays unsolved until the post-seq processing
                         # loop below — at which point any inner metas
                         # have already been resolved, and instantiate +
-                        # close together produce a fully-closed Lam.
+                        # close together produce a fully-closed term.
                         deferred_subgoal_wraps.append(
-                            (focused_meta_id, focused_intros[:], term))
+                            (focused_meta_id, focused_intros[:],
+                             focused_haves[:], focused_order[:], term))
                         focused_intros = []
+                        focused_haves = []
+                        focused_order = []
                     else:
                         self.mctx.assign(focused_meta_id,
                                          self.mctx.instantiate(term))
@@ -1729,19 +1772,34 @@ class Elaborator:
                     f"{show_expr(self.mctx.instantiate(m_ty))}")
             if main_term is None:
                 raise ElabError("seq has only intros, no body tactic")
-            # Process deferred subgoal-local intro wraps in reverse order
-            # (inner-first), so each outer entry's term has its inner
-            # metas already resolved by the time we instantiate + close.
-            for meta_id, intros, term in reversed(deferred_subgoal_wraps):
-                term = self.mctx.instantiate(term)
-                for name, dom, fv in reversed(intros):
-                    term = Lam(name, dom,
-                               close(self.mctx.instantiate(term), fv))
+            # Process deferred subgoal-local intro+have wraps in reverse
+            # order (inner-first), so each outer entry's term has its
+            # inner metas already resolved by the time we instantiate +
+            # close.  Walk `order` in reverse: chronological-last
+            # binding becomes the innermost wrap.  We look up each fv
+            # in the captured intros/haves lists by name.
+            def _wrap_by_order(term, order_list, intros_list, haves_list):
+                intros_by_fv = {fv: (n, d) for n, d, fv in intros_list}
+                haves_by_fv = {fv: (n, t, v) for n, t, v, fv in haves_list}
+                for fv in reversed(order_list):
+                    term = self.mctx.instantiate(term)
+                    if fv in intros_by_fv:
+                        name, dom = intros_by_fv[fv]
+                        term = Lam(name, dom, close(term, fv))
+                    elif fv in haves_by_fv:
+                        name, ty, val = haves_by_fv[fv]
+                        term = Let(name, ty, val, close(term, fv))
+                return term
+            for meta_id, intros, haves, order, term in reversed(
+                    deferred_subgoal_wraps):
+                term = _wrap_by_order(
+                    self.mctx.instantiate(term), order, intros, haves)
                 self.mctx.assign(meta_id, self.mctx.instantiate(term))
-            # Final wrap: instantiate fully, then close main's intros.
-            result = self.mctx.instantiate(main_term)
-            for name, dom, fv in reversed(main_intros):
-                result = Lam(name, dom, close(result, fv))
+            # Final wrap: instantiate fully, then close main's intros +
+            # haves in reverse chronological order.
+            result = _wrap_by_order(
+                self.mctx.instantiate(main_term),
+                main_order, main_intros, main_haves)
             return result, []
         finally:
             ctx.entries[:] = initial_entries

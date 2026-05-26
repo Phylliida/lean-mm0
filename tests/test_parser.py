@@ -216,6 +216,11 @@ def test_parse_and_verify_nat_dec_le():
                  "nat_le_chain.lean", "nat_dec_le.lean")
 
 
+def test_parse_and_verify_have():
+    # `have h : T := e` tactic.  add_comm + zero_add are from math.lean.
+    _run_example("math.lean", "have.lean")
+
+
 def test_parse_and_verify_revert():
     # revert example uses zero_add, succ_add, lift_succ from
     # math.lean / nat_lemmas.lean.
