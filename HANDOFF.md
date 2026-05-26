@@ -2,19 +2,19 @@
 
 This is a working prototype Metamath-Zero backend for a Lean-flavoured
 dependent type theory.  The goal: shrink the trusted base of a Lean-style
-proof down to a tiny verifier — about 670 lines of trusted code (the
+proof down to a tiny verifier — about 900 lines of trusted code (the
 MM0 verifier plus a CIC axiomatisation in MM0 syntax) — while everything
-else (kernel, elaborator, emitter, parser, ~6.6 kLoC) lives outside the
-trust boundary.
+else (kernel, elaborator, emitter, parser, tactics, ~7 kLoC) lives
+outside the trust boundary.
 
 ## Current state
 
 | | |
 |---|---|
 | Tests | **114 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 47 parser examples) |
-| Total source | ~7.0 kLoC Python + 188 LoC MM0 prelude + ~2700 LoC `.lean` examples (47 files) |
+| Total source | ~7.0 kLoC Python + 188 LoC MM0 prelude + 2618 LoC `.lean` examples (47 files) |
 | Trusted base | `src/mm0_verify.py` (710 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 58+ commits on `master`; clean working tree |
+| Repo | 59 commits on `master`; clean working tree |
 
 ## What the pipeline does
 
@@ -76,13 +76,13 @@ lean-mm0/
 │   ├── elaborator.py   implicit/level metas, first-order + HOP unif.,
 │   │                   instance synth (backtracking), tactics
 │   ├── emitter.py      kernel derivation → MM0 proof text
-│   └── mm0_verify.py   ← TRUSTED: MM0 s-expression verifier (669 LoC)
-├── examples/           37 .lean files (1337 LoC) that compile + verify
+│   └── mm0_verify.py   ← TRUSTED: MM0 s-expression verifier (710 LoC)
+├── examples/           47 .lean files (2618 LoC) that compile + verify
 ├── tests/
 │   ├── test_kernel_smoke.py   (7 tests)
 │   ├── test_emit_basic.py     (3 tests)
 │   ├── suite.py               (57 tests across 14 categories)
-│   └── test_parser.py         (37 .lean examples, each round-tripped)
+│   └── test_parser.py         (47 .lean examples, each round-tripped)
 └── run_all.py          single entry point: runs all 4 test files
 ```
 
@@ -188,7 +188,7 @@ accept something false — only reject something true.
 
 ## What's been built (chronological)
 
-48 commits — feature commits + HANDOFF updates interleaved:
+59 commits — feature commits + HANDOFF updates interleaved:
 
 ```
 383b984  Initial commit: lean-mm0 prototype
@@ -249,7 +249,7 @@ b72c7ed  List.decEq for List Nat + no-confusion helpers
 10cdc3d  List theorems: length_map, map_append, map_compose
 3d3ab7c  simp tactic (MVP): iterate rewrites with given lemmas, try rfl
 d9765ce  @[simp] attribute + env-collected lemma database + unify match
-(next)   Index unification for induction tactic (Nat.le_zero etc.)
+d20de9c  Index unification for induction + name-based tactic-arg resolution
 ```
 
 ### `383b984` — initial commit
@@ -599,17 +599,17 @@ Compared to a production Lean / mathlib stack, the major missing pieces:
 
 | Feature | Status | Why hard |
 |---|---|---|
-| `Decidable` / `if then else` | implemented (`Decidable.isTrue/isFalse`, `ite`, `if/then/else` sugar, `Nat.decEq`, `Bool.decEq`, composition `And`/`Or`/`Not`) | — |
-| `rewrite` / `rw` tactic | implemented (builds `Eq.rec` with motive abstracting LHS) | — |
-| `cases` tactic | implemented (v1+v2: non-recursive and recursive ctors; non-dependent motive only — see below) | dependent motive would need each minor's return type to be `G[scrut := ctor_pattern]` with careful BVar bookkeeping |
-| `apply` tactic (with subgoal generation) | implemented; subgoals carry ctx snapshots and survive intro/seq context switches | — |
-| `simp` tactic | implemented (`examples/simp.lean`): `simp [extras]` uses env-collected `@[simp]` lemmas + extras; peels Π binders into metas; unifies LHS against goal subterms.  No congruence rules and no simp normal-form heuristics yet (would need significant additional infra) |
-| `induction` tactic | implemented (`examples/induction.lean`, `examples/indexed_cases.lean`): dependent motive, IH typed at the recursive sub-term.  Works for Nat, Bool, List, **and indexed inductives like Nat.le when their indices in the scrutinee's type are FVars**.  Subgoal-local intros chained through further `apply`s + `exact <fvar>` work too (wrap deferred to end-of-seq).  Auto-revert of dependent hypotheses + index unification (for concrete indices) not done |
-| `revert` tactic | implemented (`examples/revert.lean`) — `revert h` pulls an intro back into the goal as a leading Π.  Naturally pairs with `induction` to generalise a hypothesis before inducting on another |
+| `Decidable` / `if then else` | implemented (`Decidable.isTrue/isFalse`, `ite`, `if/then/else` sugar, `Nat.decEq`, `Bool.decEq`, monomorphic + polymorphic `List.decEq`, composition `And`/`Or`/`Not`) | — |
+| `rewrite` / `rw` tactic | implemented (builds `Eq.rec` with motive abstracting LHS; β-normalises the goal so it works inside recursor minors) | — |
+| `apply` tactic | implemented; subgoals carry ctx snapshots and survive intro/seq context switches | — |
+| `cases` tactic | implemented (v1+v2 for non-indexed, v3 for indexed with non-dependent motive).  Real dependent index-case-analysis (with index unification) is on `induction`, not `cases` | — |
+| `induction` tactic | implemented (`examples/induction.lean`, `examples/indexed_cases.lean`, `examples/index_unif.lean`): dependent motive, IH typed at the recursive sub-term.  Works for Nat, Bool, List, **and indexed inductives like Nat.le including concrete indices via index unification**.  Subgoal-local intros chained through further `apply`s + `exact <fvar>` close correctly (wrap deferred to end-of-seq).  Auto-revert of dependent hypotheses not done — user must `revert` manually | — |
+| `revert` tactic | implemented (`examples/revert.lean`) — `revert h` pulls an intro back into the goal as a leading Π.  Naturally pairs with `induction` to generalise a hypothesis before inducting on another | — |
+| `simp` tactic | implemented (`examples/simp.lean`): `simp [extras]` uses env-collected `@[simp]` lemmas + extras; peels Π binders into metas; unifies LHS against goal subterms; iterates to fixpoint and tries `rfl` | No congruence rules and no simp normal-form heuristics — significant additional infra |
 | Full `match` syntax in `def` (`def f \| 0 => 0 \| succ k => k`) | not implemented | needs equation compiler |
-| Match on indexed inductives with recursive ctors (`Vec.cons`, `Nat.le.step`) | not implemented | needs IH-motive-application logic that threads per-rec-arg index expressions |
+| Match on indexed inductives with recursive ctors (`Vec.cons`, `Nat.le.step`) | not implemented (the indexed-match v1 handles only non-recursive ctors) | IH-motive-application logic must thread per-rec-arg index expressions |
 | Mutual inductives w/ cross-recursor | partial (constructors only) | needs the "tag-encoding" pass |
-| Notation/macro system | minimal (only `infix*`) | real Lean macros are a programmable language |
+| Notation/macro system | minimal (only `infix*`) | real Lean macros are a programmable language; a useful subset (mixfix `notation`) is tractable |
 | Proof irrelevance | axiom in prelude; not auto-applied | needs type-aware def-eq |
 | Module/`import` system | not implemented | minimal value for a prototype |
 | Mathlib itself | unreachable in any chat session | depends on ~all of the above plus 1M+ LoC of Lean |
@@ -621,42 +621,53 @@ up" below.
 
 Pieces ordered by impact and tractability:
 
-1. **More Nat algebra / ordering** — `add_zero`, `mul_zero`, `mul_one`,
-   `add_assoc`, `zero_mul`, `one_mul` (`nat_lemmas.lean`); `succ_mul`,
-   `mul_comm`, `left_distrib`, `mul_assoc`, `right_distrib`,
-   `add_left_comm` (`nat_mul.lean`); `le_refl`, `le_trans`
-   (`nat_le.lean`); `le_succ`, `le_succ_of_le`, `zero_le`,
+1. **More Nat ordering** — what's done: `le_refl`, `le_trans`
+   (`nat_le.lean`); `zero_le`, `le_succ`, `le_succ_of_le`,
    `succ_le_succ`, `lt_succ_self`, `lt_succ_of_lt`, `le_of_lt`
-   (`nat_le_more.lean`) are done.  Open: `le_antisymm`, `lt_irrefl`,
-   `le_total` (these last few want indexed-inductive case analysis,
-   which is the next engine fix — see item 4).
+   (`nat_le_more.lean`); `Nat.le_zero`, `Nat.not_succ_le_zero` via
+   the `induction` tactic with index unification (`index_unif.lean`).
+   Open: `pred_le_pred` (`succ n ≤ succ m → n ≤ m` — easy via
+   `induction` + index unification), then `lt_irrefl`, `le_antisymm`,
+   `le_total` follow naturally.  Probably ~1 page each.
 
-2. **More tactics** — `rewrite` (`5380a78`), `cases` v1+v2 (`282e66d`,
-   `bcfcd73`), `induction`, `revert`, and `simp` (MVP) are in.  Next:
-   index unification + auto-revert for `induction` on indexed
-   inductives with concrete indices; `@[simp]` lemma database +
-   congruence rules to make `simp` more powerful.
-
-3. **More Decidable instances** — `And` / `Or` / `Not` (`decidable_compose.lean`),
-   `Nat.decEq` (`nat_dec_eq.lean`), `Bool.decEq` (`bool_dec_eq.lean`),
-   `List.decEq` for `List Nat` (`list_dec_eq.lean`), and a polymorphic
-   `List.decEq` (`list_dec_eq_poly.lean`) parameterised over an
-   element-wise decidable equality are done.  Open: `Decidable (Nat.le a b)`,
-   `Decidable (Nat.lt a b)`, decidable membership for lists.
-
-4. **Indexed-inductive match v2 (recursive ctors)** — extend the v1
+2. **Indexed-inductive match v2 (recursive ctors)** — extend the v1
    indexed match to handle `Nat.le.step`, `Vec.cons`, etc.  Needs the
-   IH-motive-application logic to thread per-rec-arg index expressions.
+   IH-motive-application logic to thread per-rec-arg index expressions
+   (we have the templates in `IotaRule.rec_index_templates`).  Would
+   let users pattern-match these via `match` instead of always going
+   through hand-rolled `Nat.le.rec`.
 
-5. **Notation/macro system** — Generalise `infix` to arbitrary mixfix
+3. **More Decidable instances** — `And` / `Or` / `Not`, `Nat.decEq`,
+   `Bool.decEq`, mono + polymorphic `List.decEq` are done.  Open:
+   `Decidable (Nat.le a b)`, `Decidable (Nat.lt a b)` — would need
+   `pred_le_pred` (item 1) as a building block.  Then `Decidable
+   (a ∈ xs)` for lists.
+
+4. **`simp` upgrades** — current `simp` is MVP-ish: it iterates rewrites
+   from an `@[simp]` database + extras, unifies LHS against goal
+   subterms, tries `rfl`.  Real simp adds: congruence rules (rewrite
+   inside ANY position, including binders), normal-form heuristics,
+   conditional simp lemmas (lemmas with non-Eq Π binders that need
+   filling), unfolding of selected defs.  Substantial, but each piece
+   is bounded.
+
+5. **Auto-revert for `induction`** — when a hypothesis depends on the
+   thing we're inducting over, Lean's `induction` auto-reverts it so
+   the abstraction works.  We currently require the user to `revert`
+   manually before `induction`.  Adding auto-revert would let
+   `le_antisymm` (which has `h2 : Nat.le m n` alongside the `h1` we
+   induct on, where both `m` and `n` are FVars) be written naturally.
+
+6. **Notation/macro system** — Generalise `infix` to arbitrary mixfix
    notation like `notation:50 "[" a "," b "]" => Prod.mk a b`.
-   Needs a more flexible token-pattern parser.
+   Needs a more flexible token-pattern parser.  Would dramatically
+   improve example readability.
 
-6. **Mutual inductives' cross-recursor** — Compile mutual `inductive`
+7. **Mutual inductives' cross-recursor** — Compile mutual `inductive`
    blocks to a single tag-discriminated inductive, generate a
    cross-recursor.  Substantial.
 
-7. **Lean elaborator-compat layer** — Read actual `.lean` files from
+8. **Lean elaborator-compat layer** — Read actual `.lean` files from
    Lean 4 source by being more permissive about syntax (newlines as
    separators, more notation forms).  Real Lean files require
    elaborator features that aren't trivially in scope, but a useful
