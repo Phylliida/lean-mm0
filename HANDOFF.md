@@ -11,10 +11,10 @@ trust boundary.
 
 | | |
 |---|---|
-| Tests | **113 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 46 parser examples) |
-| Total source | ~6.9 kLoC Python + 188 LoC MM0 prelude + ~2600 LoC `.lean` examples (46 files) |
+| Tests | **114 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 47 parser examples) |
+| Total source | ~7.0 kLoC Python + 188 LoC MM0 prelude + ~2700 LoC `.lean` examples (47 files) |
 | Trusted base | `src/mm0_verify.py` (710 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 57+ commits on `master`; clean working tree |
+| Repo | 58+ commits on `master`; clean working tree |
 
 ## What the pipeline does
 
@@ -156,7 +156,7 @@ What the parser accepts and the elaborator handles:
 | `assumption` | succeed if some local hypothesis (innermost-first) is def-equal to the goal |
 | `rewrite h` / `rw h` | h : Eq α a b — replaces all syntactic occurrences of `a` in the goal with `b`; leaves the rewritten goal as a subgoal |
 | `cases h` | h : `Ind params indices` — emits a recursor app with one fresh meta per ctor as a subgoal.  Each subgoal has type `Π fields, Π ihs, goal`; user `intro`s the fields and IHs.  Non-dependent motive (goal stays G in every branch).  Indexed inductives are supported; the motive is constant over indices too — so case-splits on a proof of `Nat.le n m`-style hypothesis succeed but each branch sees the abstract original G, no index-specialisation |
-| `induction h` | Like `cases h` but with a **dependent** motive — each subgoal's goal is `G[h := ctor pattern]` (specialised, not the abstract original) and each IH has type `motive(rec_field)`.  Requires `h` to be a local FVar.  For *indexed* inductives, also requires every index in `h`'s type to be an FVar (so we can abstract it into the motive's binders); concrete indices would need index unification, not done.  Other context hypotheses depending on an abstracted index keep their original types (no auto-revert).  Subgoal-local intros chained with another `apply` and an `exact <fvar>` close correctly (the wrap is deferred until after all subgoals are solved) |
+| `induction h` | Like `cases h` but with a **dependent** motive — each subgoal's goal is `G[h := ctor pattern]` (specialised, not the abstract original) and each IH has type `motive(rec_field)`.  Requires `h` to be a local FVar.  For *indexed* inductives: if every index is an FVar, abstract directly; if some indices are concrete, do **index unification** — allocate a fresh FVar k_new per concrete index, replace orig in goal with k_new, wrap goal in `Π h_eq_i : Eq T_i orig_i k_new_i`, motive over k_news; after the recursor application apply `Eq.refl` for each concrete index to discharge the equality hypotheses and recover the original goal.  In each branch the user gets the h_eq hypothesis (specialised to the ctor's index pattern), which they discharge constructively (refl when the ctor's pattern matches the orig) or via no-confusion (when impossible).  Other context hypotheses depending on an abstracted index keep their original types (no auto-revert).  Subgoal-local intros chained with another `apply` and an `exact <fvar>` close correctly (the wrap is deferred until after all subgoals are solved) |
 | `t1; t2; ...` | seq — focused-goal semantics: each tactic acts on the current focused goal.  Main intros are deferred until the very end so subgoal solutions can reference them as FVars; subgoal-local intros are wrapped into Lams immediately |
 | `revert h` | inverse of `intro`: pulls a hypothesis intro'd earlier in the same `by` block back into the goal as a leading Π binder.  Pops the entry from ctx, closes the goal over its FVar, wraps with Π.  Refuses if a later intro depends on `h` (revert that one first).  Only works on intros, not on theorem binders |
 | `simp [e1, …, en]` | iterates rewriting with both env-collected `@[simp]` lemmas and the per-call extras until no lemma fires, then tries `rfl`.  Lemmas may be universally quantified — simp peels their Π binders into fresh metas each iteration and unifies the LHS against goal subterms.  On match, instantiate metas and do the rewrite.  Bounded to 200 iterations |
@@ -248,7 +248,8 @@ b72c7ed  List.decEq for List Nat + no-confusion helpers
 4a0d5fb  Polymorphic List.decEq + match-on-inner-Lam-binder parser fix
 10cdc3d  List theorems: length_map, map_append, map_compose
 3d3ab7c  simp tactic (MVP): iterate rewrites with given lemmas, try rfl
-(next)   @[simp] attribute + env-collected lemma database
+d9765ce  @[simp] attribute + env-collected lemma database + unify match
+(next)   Index unification for induction tactic (Nat.le_zero etc.)
 ```
 
 ### `383b984` — initial commit
@@ -717,6 +718,16 @@ Pieces ordered by impact and tractability:
   search, so it works inside recursor minors where the goal looks like
   `(λk. motive k) (ctor args)` (an unreduced β-redex).  See `_beta_norm`
   in `elaborator.py`.
+
+- **Tactic-arg BVar resolution is name-based.**  The parser threads a
+  `bvar_stack` (list of names, oldest first) with each tactic so the
+  elaborator can resolve identifier-BVars.  Naive positional indexing
+  `ctx.entries[-(idx+1)]` breaks across induction branches because the
+  parser stack accumulates intros from ALL branches but each branch's
+  ctx is restored to a per-branch snapshot.  `_resolve_bvars_named`
+  looks up by NAME and walks ctx innermost-first, picking the most
+  recent matching entry — correct even when a name shadows itself in
+  later branches.
 
 - **`match` on an inner-`fun`-bound variable.**  When a `match` is
   scrutinising a BVar from a `fun` binder inside the def's body (e.g.

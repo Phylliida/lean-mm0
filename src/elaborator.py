@@ -817,7 +817,7 @@ class Elaborator:
             # The stored expr has BVars from the tactic-parse scope.
             # Resolve them against the elaborator's current ctx (which
             # has FVars for each prior `intro`).
-            expr_r = _resolve_bvars(expr, ctx)
+            expr_r = _resolve_bvars_named(expr, _bvar_stack, ctx)
             e_elab, _ = self.elab(expr_r, goal, ctx)
             return e_elab, []
 
@@ -834,7 +834,7 @@ class Elaborator:
 
         if kind == "apply":
             _, expr, _bvar_stack = tac
-            expr_r = _resolve_bvars(expr, ctx)
+            expr_r = _resolve_bvars_named(expr, _bvar_stack, ctx)
             # Snapshot ctx so the subgoals can later be solved by tactics
             # that may run in a different ctx (e.g. after the seq has
             # popped some intros).
@@ -888,7 +888,7 @@ class Elaborator:
 
         if kind == "cases":
             _, expr, _bvar_stack = tac
-            expr_r = _resolve_bvars(expr, ctx)
+            expr_r = _resolve_bvars_named(expr, _bvar_stack, ctx)
             scrut_e, scrut_ty = self.elab(expr_r, None, ctx)
             scrut_ty_w = self.kernel.whnf(
                 self.mctx.instantiate(scrut_ty), ctx)
@@ -1011,7 +1011,7 @@ class Elaborator:
             # induction useful — non-dependent cases would leave the goal
             # as the abstract `G` in every branch, useless for real proofs.
             _, expr, _bvar_stack = tac
-            expr_r = _resolve_bvars(expr, ctx)
+            expr_r = _resolve_bvars_named(expr, _bvar_stack, ctx)
             scrut_e, scrut_ty = self.elab(expr_r, None, ctx)
             if not isinstance(scrut_e, FVar):
                 raise ElabError(
@@ -1034,21 +1034,84 @@ class Elaborator:
             n_params = decl.num_params
             n_indices = decl.num_indices
             param_args = ind_args[:n_params]
-            index_args = ind_args[n_params:n_params + n_indices]
-            # For indexed inductives, require all index args in the
-            # scrutinee's type to be FVars — we abstract them into the
-            # motive's binders.  Concrete index args would need index
-            # unification (generate Eq-hypotheses bridging the concrete
-            # index to the constructor's index pattern); not done here.
-            if n_indices > 0:
-                for ia in index_args:
-                    if not isinstance(ia, FVar):
-                        raise ElabError(
-                            f"induction: indexed inductive {decl.name} "
-                            f"with non-FVar index {show_expr(ia)} not "
-                            f"supported (index unification not done)")
+            # Keep both: `index_args_for_rec` are the literal index values
+            # in the scrutinee's type (used in the recursor application
+            # spine); `index_args` is rewritten below to make every
+            # concrete-index position an FVar so the standard
+            # motive-build via `close` works uniformly.
+            index_args_for_rec = list(ind_args[n_params:n_params + n_indices])
+            index_args = list(ind_args[n_params:n_params + n_indices])
             ind_lvls = head.levels
             G = self.mctx.instantiate(goal)
+            # Compute the inductive's index types up front so we know
+            # T_i for every concrete index that needs unification.
+            if n_indices > 0:
+                ind_ty_pre = inst_levels(
+                    decl.type_, decl.level_params, ind_lvls)
+                for pa in param_args:
+                    if not isinstance(ind_ty_pre, Pi):
+                        raise ElabError(
+                            f"induction: {decl.name} bad inductive type")
+                    ind_ty_pre = subst_bvar(ind_ty_pre.body, 0, pa)
+                index_types_pre: list = []
+                cur_ty_pre = ind_ty_pre
+                for _ in range(n_indices):
+                    if not isinstance(cur_ty_pre, Pi):
+                        raise ElabError(
+                            f"induction: {decl.name} bad inductive type")
+                    index_types_pre.append(cur_ty_pre.dom)
+                    cur_ty_pre = cur_ty_pre.body
+            else:
+                index_types_pre = []
+            # Index unification for concrete (non-FVar) indices:
+            # Allocate a fresh FVar k_new_i for each concrete index;
+            # replace orig_i → FVar(k_new_i) in G; wrap the result in
+            # Π h_eq binders bridging orig_i and k_new_i.  Then run the
+            # standard motive-build logic over this extended goal with
+            # all indices treated as FVars.  After the recursor application
+            # we re-apply to `Eq.refl orig_i` for each concrete index to
+            # discharge the equality hypotheses and recover G.
+            #
+            # We push the fresh k_new FVars onto ctx so they're typed
+            # entries (the kernel will look them up).  But we snapshot
+            # ctx for subgoal use BEFORE the pushes, so the subgoals see
+            # the user-visible ctx (which the parser's bvar_stack
+            # mirrors); and we pop them at the very end so other code
+            # doesn't see them either.  This keeps k_news internal to
+            # the induction tactic.
+            pre_index_unif_ctx_len = len(ctx.entries)
+            concrete_idx_data: List[Tuple[int, Expr, str, Expr, "Level"]] = []
+            for i, ia in enumerate(index_args):
+                if not isinstance(ia, FVar):
+                    T_i = index_types_pre[i]
+                    # Infer T_i's universe so we can build Eq.{u}.
+                    T_i_sort_w = self.kernel.whnf(
+                        self.mctx.instantiate(
+                            self._infer_elaborated(T_i, ctx)),
+                        ctx)
+                    if not isinstance(T_i_sort_w, Sort):
+                        raise ElabError(
+                            f"induction: index {i}'s type doesn't have "
+                            f"a Sort: {show_expr(T_i_sort_w)}")
+                    u_eq = T_i_sort_w.level
+                    knew_name = ctx.push(f"_k{i}", T_i)
+                    knew_fv = FVar(knew_name, T_i)
+                    concrete_idx_data.append((i, ia, knew_name, T_i, u_eq))
+                    index_args[i] = knew_fv
+                    # Replace orig_i with knew_fv in G.
+                    G, _ = _replace_term(G, ia, knew_fv)
+            # Wrap G with Π h_eq binders, one per concrete index.  Innermost
+            # h_eq is the LAST concrete index; when we apply Eq.refl args
+            # at the end, the FIRST refl discharges the OUTERMOST = first
+            # concrete index.  Each wrap shifts G's outer-ctx BVars by 1
+            # (shift cutoff=0 leaves inner-binder BVars alone).  FVars in
+            # G stay as FVars; the motive-build below closes them in the
+            # usual way.
+            for i_pos, orig_idx, knew_name, T_i, u_eq in reversed(
+                    concrete_idx_data):
+                eq_ty = App(App(App(Const("Eq", (u_eq,)), T_i),
+                                 orig_idx), FVar(knew_name, T_i))
+                G = Pi(f"_h_eq{i_pos}", eq_ty, shift(G, 1, 0))
             # Build ind_applied with the original FVars (params and the
             # index FVars from the scrutinee's type).  We then `close`
             # those FVars one at a time as we add binders OUTSIDE — close
@@ -1118,7 +1181,11 @@ class Elaborator:
                     result = subst_bvar(result, 0, idx_vals[i])
                 return result
 
-            ctx_snap = tuple(ctx.entries)
+            # ctx_snap omits the internal k_new entries we pushed for
+            # index unification, so subgoals see the same ctx the user
+            # sees (matching the parser's bvar_stack).  This avoids
+            # BVar-index drift when the user's tactic terms get resolved.
+            ctx_snap = tuple(ctx.entries[:pre_index_unif_ctx_len])
             minors: list = []
             subgoals_out: list = []
             for ctor_name in decl.constructor_names:
@@ -1211,14 +1278,26 @@ class Elaborator:
             rec_term = App(rec_term, motive)
             for m in minors:
                 rec_term = App(rec_term, m)
-            for ia in index_args:
+            for ia in index_args_for_rec:
                 rec_term = App(rec_term, ia)
             rec_term = App(rec_term, scrut_e)
+            # If we did index unification, the recursor's result type is
+            # `Π h_eq_0 … h_eq_{k-1}, G`.  Apply Eq.refl for each concrete
+            # index (in order: outermost h_eq first) to discharge them.
+            for i_pos, orig_idx, _knew_name, T_i, u_eq in concrete_idx_data:
+                refl_term = App(App(Const("Eq.refl", (u_eq,)), T_i),
+                                 orig_idx)
+                rec_term = App(rec_term, refl_term)
+            # Pop the internal k_new entries so they don't leak into the
+            # surrounding ctx; subgoals already captured the pre-push
+            # snapshot in ctx_snap.
+            for _ in range(len(concrete_idx_data)):
+                ctx.pop()
             return rec_term, subgoals_out
 
         if kind == "rewrite":
             _, expr, _bvar_stack = tac
-            expr_r = _resolve_bvars(expr, ctx)
+            expr_r = _resolve_bvars_named(expr, _bvar_stack, ctx)
             h_elab, h_ty = self.elab(expr_r, None, ctx)
             h_ty_w = self.kernel.whnf(
                 self.mctx.instantiate(h_ty), ctx)
@@ -1300,7 +1379,7 @@ class Elaborator:
             def _peel_for_match(expr: Expr):
                 """Elaborate expr, peel all leading Πs into fresh metas,
                 return (h_elab, α, a, b, u_lvl) or None if not an Eq."""
-                expr_r = _resolve_bvars(expr, ctx)
+                expr_r = _resolve_bvars_named(expr, _bvar_stack, ctx)
                 h_elab_, h_ty_ = self.elab(expr_r, None, ctx)
                 cur_ty = self.mctx.instantiate(h_ty_)
                 cur_ty_w = self.kernel.whnf(cur_ty, ctx)
@@ -1754,6 +1833,57 @@ def _remap_for_proj(e: Expr, field_idx: int, n_params: int) -> Expr:
                        walk(t.value, cutoff), walk(t.body, cutoff + 1))
         return t
     return walk(e, 0)
+
+
+def _resolve_bvars_named(e: Expr, bvar_stack: List[str], ctx: LocalCtx,
+                          cutoff: int = 0) -> Expr:
+    """Resolve free BVars in a tactic-argument expression by NAME.
+
+    The parser threads a `bvar_stack` (list of names, oldest first) along
+    with each tactic.  At elaboration time, ctx may not match bvar_stack
+    structurally — e.g. after `induction h; intro h_eq; ...; intro h_eq;`
+    the parser stack contains both `h_eq`s but each branch's ctx only
+    has its own.  Positional `ctx.entries[-(idx+1)]` indexing gets the
+    wrong entry; resolving by name (and walking ctx innermost-first to
+    pick the most recent matching entry) is what gives the right
+    FVar."""
+    if isinstance(e, BVar):
+        if e.idx < cutoff:
+            return e
+        ridx = e.idx - cutoff
+        if ridx < len(bvar_stack):
+            name = bvar_stack[-(ridx + 1)]
+            # Walk ctx innermost-first; take the most recent matching entry.
+            for n, t, _ in reversed(ctx.entries):
+                if n == name:
+                    return FVar(n, t)
+            # Try a substring match (ctx.push may have appended `#N`).
+            for n, t, _ in reversed(ctx.entries):
+                if n == name or n.split("#")[0] == name:
+                    return FVar(n, t)
+        return e
+    if isinstance(e, (Sort, FVar, Const, Meta)):
+        return e
+    if isinstance(e, Explicit):
+        return Explicit(_resolve_bvars_named(e.inner, bvar_stack, ctx, cutoff))
+    if isinstance(e, App):
+        return App(_resolve_bvars_named(e.fn, bvar_stack, ctx, cutoff),
+                   _resolve_bvars_named(e.arg, bvar_stack, ctx, cutoff))
+    if isinstance(e, Lam):
+        return Lam(e.binder,
+                   _resolve_bvars_named(e.dom, bvar_stack, ctx, cutoff),
+                   _resolve_bvars_named(e.body, bvar_stack, ctx, cutoff + 1))
+    if isinstance(e, Pi):
+        return Pi(e.binder,
+                  _resolve_bvars_named(e.dom, bvar_stack, ctx, cutoff),
+                  _resolve_bvars_named(e.body, bvar_stack, ctx, cutoff + 1),
+                  e.implicit, e.inst_implicit)
+    if isinstance(e, Let):
+        return Let(e.binder,
+                   _resolve_bvars_named(e.type_, bvar_stack, ctx, cutoff),
+                   _resolve_bvars_named(e.value, bvar_stack, ctx, cutoff),
+                   _resolve_bvars_named(e.body, bvar_stack, ctx, cutoff + 1))
+    return e
 
 
 def _resolve_bvars(e: Expr, ctx: LocalCtx, cutoff: int = 0) -> Expr:

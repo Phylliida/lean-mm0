@@ -213,6 +213,11 @@ def test_parse_and_verify_simp():
     _run_example("math.lean", "nat_lemmas.lean", "simp.lean")
 
 
+def test_parse_and_verify_index_unif():
+    # Index unification needs succ_ne_zero from nat_inj.lean.
+    _run_example("nat_inj.lean", "index_unif.lean")
+
+
 def test_parse_and_verify_nat_mul():
     _run_example("math.lean", "nat_lemmas.lean", "nat_mul.lean")
 
