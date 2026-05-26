@@ -12,9 +12,9 @@ trust boundary.
 | | |
 |---|---|
 | Tests | **113 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 46 parser examples) |
-| Total source | ~6.9 kLoC Python + 188 LoC MM0 prelude + ~2520 LoC `.lean` examples (46 files) |
+| Total source | ~6.9 kLoC Python + 188 LoC MM0 prelude + ~2600 LoC `.lean` examples (46 files) |
 | Trusted base | `src/mm0_verify.py` (710 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 56+ commits on `master`; clean working tree |
+| Repo | 57+ commits on `master`; clean working tree |
 
 ## What the pipeline does
 
@@ -159,7 +159,8 @@ What the parser accepts and the elaborator handles:
 | `induction h` | Like `cases h` but with a **dependent** motive — each subgoal's goal is `G[h := ctor pattern]` (specialised, not the abstract original) and each IH has type `motive(rec_field)`.  Requires `h` to be a local FVar.  For *indexed* inductives, also requires every index in `h`'s type to be an FVar (so we can abstract it into the motive's binders); concrete indices would need index unification, not done.  Other context hypotheses depending on an abstracted index keep their original types (no auto-revert).  Subgoal-local intros chained with another `apply` and an `exact <fvar>` close correctly (the wrap is deferred until after all subgoals are solved) |
 | `t1; t2; ...` | seq — focused-goal semantics: each tactic acts on the current focused goal.  Main intros are deferred until the very end so subgoal solutions can reference them as FVars; subgoal-local intros are wrapped into Lams immediately |
 | `revert h` | inverse of `intro`: pulls a hypothesis intro'd earlier in the same `by` block back into the goal as a leading Π binder.  Pops the entry from ctx, closes the goal over its FVar, wraps with Π.  Refuses if a later intro depends on `h` (revert that one first).  Only works on intros, not on theorem binders |
-| `simp [e1, …, en]` | iterates the rewrite tactic with the listed Eq proofs until no equation matches, then tries `rfl` to close the simplified goal.  If rfl succeeds, the simp is fully discharged; otherwise the simplified goal becomes a subgoal.  Bounded to 200 iterations (so a `comm`-lemma can't spin forever).  This is an MVP — no equation database, no congruence rules, no normalisation heuristics; the user picks the lemmas |
+| `simp [e1, …, en]` | iterates rewriting with both env-collected `@[simp]` lemmas and the per-call extras until no lemma fires, then tries `rfl`.  Lemmas may be universally quantified — simp peels their Π binders into fresh metas each iteration and unifies the LHS against goal subterms.  On match, instantiate metas and do the rewrite.  Bounded to 200 iterations |
+| `@[simp]` on a decl | registers the decl in `env.simp_lemmas`; subsequent `simp` calls auto-include it.  Apply to `theorem`s whose conclusion is `Eq α a b` (after peeling Πs) |
 
 ## Trust boundary detail
 
@@ -246,7 +247,8 @@ af21325  revert tactic + add_comm via revert+induction
 b72c7ed  List.decEq for List Nat + no-confusion helpers
 4a0d5fb  Polymorphic List.decEq + match-on-inner-Lam-binder parser fix
 10cdc3d  List theorems: length_map, map_append, map_compose
-(next)   simp tactic (MVP): iterate rewrites with given lemmas, try rfl
+3d3ab7c  simp tactic (MVP): iterate rewrites with given lemmas, try rfl
+(next)   @[simp] attribute + env-collected lemma database
 ```
 
 ### `383b984` — initial commit
@@ -600,7 +602,7 @@ Compared to a production Lean / mathlib stack, the major missing pieces:
 | `rewrite` / `rw` tactic | implemented (builds `Eq.rec` with motive abstracting LHS) | — |
 | `cases` tactic | implemented (v1+v2: non-recursive and recursive ctors; non-dependent motive only — see below) | dependent motive would need each minor's return type to be `G[scrut := ctor_pattern]` with careful BVar bookkeeping |
 | `apply` tactic (with subgoal generation) | implemented; subgoals carry ctx snapshots and survive intro/seq context switches | — |
-| `simp` tactic | MVP implemented (`examples/simp.lean`) — `simp [e1, …, en]` iterates rewrites with the listed lemmas to fixpoint, then tries rfl.  No equation database / no auto-`@[simp]` collection / no congruence rules; the user picks the lemmas each call |
+| `simp` tactic | implemented (`examples/simp.lean`): `simp [extras]` uses env-collected `@[simp]` lemmas + extras; peels Π binders into metas; unifies LHS against goal subterms.  No congruence rules and no simp normal-form heuristics yet (would need significant additional infra) |
 | `induction` tactic | implemented (`examples/induction.lean`, `examples/indexed_cases.lean`): dependent motive, IH typed at the recursive sub-term.  Works for Nat, Bool, List, **and indexed inductives like Nat.le when their indices in the scrutinee's type are FVars**.  Subgoal-local intros chained through further `apply`s + `exact <fvar>` work too (wrap deferred to end-of-seq).  Auto-revert of dependent hypotheses + index unification (for concrete indices) not done |
 | `revert` tactic | implemented (`examples/revert.lean`) — `revert h` pulls an intro back into the goal as a leading Π.  Naturally pairs with `induction` to generalise a hypothesis before inducting on another |
 | Full `match` syntax in `def` (`def f \| 0 => 0 \| succ k => k`) | not implemented | needs equation compiler |

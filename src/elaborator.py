@@ -1275,29 +1275,18 @@ class Elaborator:
             return term, [(sub_meta.id, ctx_snap)]
 
         if kind == "simp":
-            # `simp [e1, e2, …]`: iterate the rewrite tactic with the
-            # listed Eq proofs until no equation matches the goal, then
-            # try rfl.  If rfl closes the goal, the simp is fully
-            # discharged; otherwise the simplified goal becomes a
-            # subgoal for the user.
+            # `simp [e1, e2, …]`: iterate rewriting with both env-collected
+            # @[simp] lemmas and the user's per-call extras until no lemma
+            # fires; then try rfl.  Lemmas may be universally quantified
+            # — we peel their Π binders into fresh metas each iteration,
+            # then search the goal for a subterm that unifies with the
+            # equation's LHS.  On match, instantiate the metas and do the
+            # actual replacement.
             _, exprs, _bvar_stack = tac
-            # Elaborate each equation up front.
-            eqs: List[Tuple[Expr, Expr, Expr, Expr, "Level"]] = []
-            for expr in exprs:
-                expr_r = _resolve_bvars(expr, ctx)
-                h_elab, h_ty = self.elab(expr_r, None, ctx)
-                h_ty_w = self.kernel.whnf(
-                    self.mctx.instantiate(h_ty), ctx)
-                head_h, args_h = _spine(h_ty_w)
-                if not (isinstance(head_h, Const)
-                        and head_h.name == "Eq"
-                        and len(args_h) == 3):
-                    raise ElabError(
-                        f"simp: every entry must be an Eq proof; "
-                        f"{show_expr(expr)} has type "
-                        f"{show_expr(h_ty_w)}")
-                α, a, b = args_h
-                eqs.append((h_elab, α, a, b, head_h.levels[0]))
+            all_exprs: list = []
+            for nm in self.env.simp_lemmas:
+                all_exprs.append(Const(nm, ()))
+            all_exprs.extend(exprs)
             G = _beta_norm(self.mctx.instantiate(goal))
             G_ty_w = self.kernel.whnf(
                 self.mctx.instantiate(self._infer_elaborated(G, ctx)),
@@ -1307,23 +1296,87 @@ class Elaborator:
                     f"simp: goal's type is not a Sort: "
                     f"{show_expr(G_ty_w)}")
             v_level = G_ty_w.level
-            # Each iteration tries every equation until one fires; if
-            # none fires we stop.  Bounded to avoid loops on bad simp
-            # sets (e.g. `comm` lemmas oscillating).
+
+            def _peel_for_match(expr: Expr):
+                """Elaborate expr, peel all leading Πs into fresh metas,
+                return (h_elab, α, a, b, u_lvl) or None if not an Eq."""
+                expr_r = _resolve_bvars(expr, ctx)
+                h_elab_, h_ty_ = self.elab(expr_r, None, ctx)
+                cur_ty = self.mctx.instantiate(h_ty_)
+                cur_ty_w = self.kernel.whnf(cur_ty, ctx)
+                while isinstance(cur_ty_w, Pi):
+                    m = self.mctx.fresh(cur_ty_w.dom)
+                    h_elab_ = App(h_elab_, m)
+                    cur_ty = subst_bvar(cur_ty_w.body, 0, m)
+                    cur_ty = self.mctx.instantiate(cur_ty)
+                    cur_ty_w = self.kernel.whnf(cur_ty, ctx)
+                head_h, args_h = _spine(cur_ty_w)
+                if not (isinstance(head_h, Const)
+                        and head_h.name == "Eq"
+                        and len(args_h) == 3):
+                    return None
+                return (h_elab_, args_h[0], args_h[1], args_h[2],
+                        head_h.levels[0])
+
+            def _find_subterm_unify(lhs: Expr, t: Expr) -> bool:
+                """Top-down search.  On first subterm s such that
+                unify(lhs, s) succeeds, leave metas assigned and return
+                True.  Otherwise restore mctx and return False."""
+                saved = self._save_mctx()
+                try:
+                    ok = unify(lhs, t, ctx, self.mctx, self.kernel,
+                               type_of=lambda x:
+                                   self._infer_elaborated(x, ctx))
+                except Exception:
+                    ok = False
+                if ok:
+                    return True
+                self._restore_mctx(saved)
+                if isinstance(t, App):
+                    return (_find_subterm_unify(lhs, t.fn)
+                            or _find_subterm_unify(lhs, t.arg))
+                if isinstance(t, Explicit):
+                    return _find_subterm_unify(lhs, t.inner)
+                if isinstance(t, Let):
+                    return (_find_subterm_unify(lhs, t.type_)
+                            or _find_subterm_unify(lhs, t.value))
+                return False
+
             MAX_SIMP_ITERS = 200
             current_goal = G
             rewrites: List[Tuple[Expr, Expr, Expr, Expr, "Level", Expr]] = []
             for _ in range(MAX_SIMP_ITERS):
                 progressed = False
-                for h_elab, α, a, b, u_lvl in eqs:
+                for expr in all_exprs:
+                    saved_outer = self._save_mctx()
+                    try:
+                        peeled = _peel_for_match(expr)
+                    except ElabError:
+                        peeled = None
+                    if peeled is None:
+                        self._restore_mctx(saved_outer)
+                        continue
+                    h_elab, α, a, b, u_lvl = peeled
+                    if not _find_subterm_unify(a, current_goal):
+                        self._restore_mctx(saved_outer)
+                        continue
+                    # Instantiate now-pinned metas.
+                    α_i = self.mctx.instantiate(α)
+                    a_i = self.mctx.instantiate(a)
+                    b_i = self.mctx.instantiate(b)
+                    h_i = self.mctx.instantiate(h_elab)
                     new_goal_attempt, occurred = _replace_term(
-                        current_goal, a, b)
-                    if occurred:
-                        rewrites.append(
-                            (h_elab, α, a, b, u_lvl, current_goal))
-                        current_goal = new_goal_attempt
-                        progressed = True
-                        break
+                        current_goal, a_i, b_i)
+                    if not occurred:
+                        # match found via unify but _replace_term doesn't
+                        # see it (rare — e.g. instantiation differs).
+                        self._restore_mctx(saved_outer)
+                        continue
+                    rewrites.append(
+                        (h_i, α_i, a_i, b_i, u_lvl, current_goal))
+                    current_goal = new_goal_attempt
+                    progressed = True
+                    break
                 if not progressed:
                     break
             # Try rfl on current_goal.
@@ -1779,12 +1832,15 @@ def elaborate_decl(env: Env, kind: str, name: str = None,
     elab = Elaborator(env)
     body_e, body_ty = elab.elab(body, ty_elab, LocalCtx())
     body_e = elab.mctx.instantiate_fully(body_e)
+    attributes = extra.get("attributes") or set()
     if kind == "theorem":
         # `example` becomes "theorem" in the parser; both produce a Theorem
         # decl, which the kernel and emitter treat as opaque (no δ-unfold).
         ker.add_theorem(Theorem(
             name=name, level_params=level_params,
             type_=ty_elab, value=body_e))
+        if "simp" in attributes:
+            env.register_simp_lemma(name)
         return
     ker.add_definition(Definition(
         name=name, level_params=level_params,
@@ -1796,6 +1852,8 @@ def elaborate_decl(env: Env, kind: str, name: str = None,
         head, _ = _spine(t)
         if isinstance(head, Const):
             env.register_instance(name, head.name)
+    if "simp" in attributes:
+        env.register_simp_lemma(name)
 
 
 def _process_inductive(env, name, lvl_params, params, result_ty, ctors):

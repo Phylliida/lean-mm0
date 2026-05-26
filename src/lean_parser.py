@@ -211,6 +211,28 @@ class P:
 
     def parse_decl(self):
         nxt = self.peek()
+        # Optional `@[attr, attr, ...]` prefix: comma-separated identifiers
+        # inside `@[ … ]`.  Currently only `simp` is recognised; unknown
+        # attributes raise.
+        attributes: set = set()
+        if nxt and nxt.text == "@" and self.i + 1 < len(self.toks) \
+                and self.toks[self.i + 1].text == "[":
+            self.take()                                  # @
+            self.take()                                  # [
+            while not self.at("]"):
+                attr_tok = self.take()
+                # "simp" lexes as kw (it's also a tactic keyword); accept
+                # both kinds here.
+                if attr_tok.kind not in ("id", "kw"):
+                    raise SyntaxError("expected attribute name")
+                if attr_tok.text != "simp":
+                    raise SyntaxError(
+                        f"unknown attribute @[{attr_tok.text}]")
+                attributes.add(attr_tok.text)
+                if self.at(","):
+                    self.take()
+            self.eat("]")
+            nxt = self.peek()
         if nxt and nxt.text == "inductive":
             return self._parse_inductive()
         if nxt and nxt.text in ("structure", "class"):
@@ -310,7 +332,7 @@ class P:
                 body = Lam(nm, dom, body)
         # `example` is treated like a theorem internally
         kind = "theorem" if kw.text == "example" else kw.text
-        return (kind, name, lvl_params, binders, ty, body)
+        return (kind, name, lvl_params, binders, ty, body, attributes)
 
     # ---- inductive / structure ----
 
@@ -556,6 +578,12 @@ class P:
             if t.kind == "sym":
                 break
             if t.kind == "kw" and t.text not in {"Sort", "Type", "Prop"}:
+                break
+            # `@[…]` is a decl-level attribute on the NEXT decl, not an
+            # Explicit-applied expression — stop the application chain
+            # here so the outer parser can pick it up.
+            if (t.text == "@" and self.i + 1 < len(self.toks)
+                    and self.toks[self.i + 1].text == "["):
                 break
             arg = self.parse_atom(lvl_params, bvar_stack)
             head = App(head, arg)
@@ -1326,7 +1354,8 @@ def elaborate(src: str, env: Env) -> List[str]:
             p.infix_table[op_text] = (prec, assoc, func_name)
             continue                                  # don't add to env
         else:
-            _, name, lvl_params, binders, ty, body = decl
-            elaborate_decl(env, kind, name, lvl_params, ty, body)
+            _, name, lvl_params, binders, ty, body, attributes = decl
+            elaborate_decl(env, kind, name, lvl_params, ty, body,
+                           attributes=attributes)
         added.extend(d for d in env.order if d not in before)
     return added

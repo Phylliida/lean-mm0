@@ -66,3 +66,43 @@ example : Eq.{1} Nat (Nat.add 1 5) 6 := add_one_via_simp 5
 theorem simp_then_apply (n m : Nat) (h : Eq.{1} Nat n m) :
     Eq.{1} Nat (Nat.succ n) (Nat.succ m) :=
   by simp [h]
+
+-- ============================================================
+-- @[simp] attribute: any `theorem` (or `def`) declared with the
+-- attribute is auto-included in every subsequent `simp` call.
+-- The lemma may be universally quantified — simp peels its Πs into
+-- fresh metas and tries to unify the LHS with a subterm of the goal.
+-- ============================================================
+
+-- Declare a simp lemma.  `zero_add` (already in math.lean) is a
+-- one-binder rewrite; the Π gets peeled into a meta that unifies
+-- against any concrete `n` in the goal.
+@[simp]
+theorem zero_add_simp (n : Nat) : Eq.{1} Nat (Nat.add 0 n) n :=
+  zero_add n
+
+-- Likewise, succ_add (1 binder applied beyond what we need).  Real
+-- mathlib has many such normalisation lemmas.
+@[simp]
+theorem succ_add_simp (m n : Nat) :
+    Eq.{1} Nat (Nat.add (Nat.succ m) n) (Nat.succ (Nat.add m n)) :=
+  succ_add m n
+
+-- Now `simp []` knows about both lemmas.  Prove `1 + n = succ n`
+-- (the `add_one` lemma) with nothing but `simp []`.
+theorem add_one_via_simp_db (n : Nat) :
+    Eq.{1} Nat (Nat.add 1 n) (Nat.succ n) :=
+  by simp []
+
+-- And `(succ m) + n`-style simplification: the leading succ should
+-- propagate out.
+theorem succ_add_normalise (m n : Nat) :
+    Eq.{1} Nat (Nat.add (Nat.succ (Nat.succ m)) n)
+               (Nat.succ (Nat.succ (Nat.add m n))) :=
+  by simp []
+
+-- Extras still work in combination with the database.  Here we add
+-- a local hypothesis `h` to the simp set on top of the env lemmas.
+theorem simp_db_plus_local (a b : Nat) (h : Eq.{1} Nat a b) :
+    Eq.{1} Nat (Nat.add 0 a) b :=
+  by simp [h]

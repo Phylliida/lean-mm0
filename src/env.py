@@ -105,6 +105,9 @@ class Env:
         self.order: List[str] = []
         # class_head_name -> list of instance Definition names
         self.instances: Dict[str, List[str]] = {}
+        # @[simp] lemmas: names of theorems / defs whose conclusion is
+        # `Eq α a b` and that should be auto-included by the simp tactic.
+        self.simp_lemmas: List[str] = []
 
     def add(self, decl) -> None:
         name = decl.name           # type: ignore[attr-defined]
@@ -127,3 +130,8 @@ class Env:
 
     def instances_of(self, class_head: str) -> List[str]:
         return self.instances.get(class_head, [])
+
+    def register_simp_lemma(self, name: str) -> None:
+        """Add a lemma to the global `simp` set."""
+        if name not in self.simp_lemmas:
+            self.simp_lemmas.append(name)
