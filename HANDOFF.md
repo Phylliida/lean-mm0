@@ -258,6 +258,8 @@ e37c491  Indexed-inductive match v2: recursive ctors (Nat.le.step, Vec.cons)
 dfd669d  Nat ordering chain: pred_le_pred → lt_irrefl → le_antisymm
 0cb1459  HANDOFF: patch hash for nat ordering chain commit
 7b21dbd  Nat.le_total: total order via double induction + cases on Or
+db70aac  HANDOFF: refresh after le_total
+(next)   Nat.decLe / Nat.decLt + min via if (instance synthesis works)
 ```
 
 ### `383b984` — initial commit
@@ -607,7 +609,7 @@ Compared to a production Lean / mathlib stack, the major missing pieces:
 
 | Feature | Status | Why hard |
 |---|---|---|
-| `Decidable` / `if then else` | implemented (`Decidable.isTrue/isFalse`, `ite`, `if/then/else` sugar, `Nat.decEq`, `Bool.decEq`, monomorphic + polymorphic `List.decEq`, composition `And`/`Or`/`Not`) | — |
+| `Decidable` / `if then else` | implemented (`Decidable.isTrue/isFalse`, `ite`, `if/then/else` sugar, `Nat.decEq`, `Bool.decEq`, monomorphic + polymorphic `List.decEq`, composition `And`/`Or`/`Not`, `Nat.decLe`/`Nat.decLt`) | — |
 | `rewrite` / `rw` tactic | implemented (builds `Eq.rec` with motive abstracting LHS; β-normalises the goal so it works inside recursor minors) | — |
 | `apply` tactic | implemented; subgoals carry ctx snapshots and survive intro/seq context switches | — |
 | `cases` tactic | implemented (v1+v2 for non-indexed, v3 for indexed with non-dependent motive).  Real dependent index-case-analysis (with index unification) is on `induction`, not `cases` | — |
@@ -635,16 +637,14 @@ Pieces ordered by impact and tractability:
    (`nat_le_more.lean`); `Nat.le_zero`, `Nat.not_succ_le_zero` via
    the `induction` tactic with index unification (`index_unif.lean`);
    `Nat.pred_le_pred`, `Nat.lt_irrefl`, `Nat.le_antisymm`,
-   `Nat.le_total` (`nat_le_chain.lean`).  Open: `Decidable (Le m n)`
-   (would chain nicely off pred_le_pred + zero_le + not_succ_le_zero,
-   but needs nested-match structural recursion to work — currently
-   only single-match outer recursion is detected).
+   `Nat.le_total` (`nat_le_chain.lean`); `Nat.decLe`, `Nat.decLt` +
+   `min` via `if` (`nat_dec_le.lean`).  Almost saturated for first-
+   order Nat ordering.
 
 2. **More Decidable instances** — `And` / `Or` / `Not`, `Nat.decEq`,
-   `Bool.decEq`, mono + polymorphic `List.decEq` are done.  Open:
-   `Decidable (Nat.le a b)`, `Decidable (Nat.lt a b)` — would need
-   `pred_le_pred` (item 1) as a building block.  Then `Decidable
-   (a ∈ xs)` for lists.
+   `Bool.decEq`, mono + polymorphic `List.decEq`, `Nat.decLe`,
+   `Nat.decLt` are done.  Open: `Decidable (a ∈ xs)` for lists
+   (needs a List membership predicate first).
 
 3. **`simp` upgrades** — current `simp` is MVP-ish: it iterates rewrites
    from an `@[simp]` database + extras, unifies LHS against goal

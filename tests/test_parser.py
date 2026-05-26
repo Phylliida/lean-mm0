@@ -208,6 +208,14 @@ def test_parse_and_verify_nat_le_chain():
                  "nat_le_chain.lean")
 
 
+def test_parse_and_verify_nat_dec_le():
+    # Decidable Le / Lt for Nat.  Uses helpers from nat_le_more,
+    # index_unif, and pred_le_pred from nat_le_chain.
+    _run_example("nat_inj.lean", "nat_le.lean", "nat_lt.lean",
+                 "nat_le_more.lean", "index_unif.lean",
+                 "nat_le_chain.lean", "nat_dec_le.lean")
+
+
 def test_parse_and_verify_revert():
     # revert example uses zero_add, succ_add, lift_succ from
     # math.lean / nat_lemmas.lean.
