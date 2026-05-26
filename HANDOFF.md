@@ -11,10 +11,10 @@ trust boundary.
 
 | | |
 |---|---|
-| Tests | **111 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 44 parser examples) |
-| Total source | ~6.8 kLoC Python + 188 LoC MM0 prelude + 2328 LoC `.lean` examples (44 files) |
+| Tests | **112 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 45 parser examples) |
+| Total source | ~6.8 kLoC Python + 188 LoC MM0 prelude + ~2450 LoC `.lean` examples (45 files) |
 | Trusted base | `src/mm0_verify.py` (710 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 54+ commits on `master`; clean working tree |
+| Repo | 55+ commits on `master`; clean working tree |
 
 ## What the pipeline does
 
@@ -243,7 +243,8 @@ e81603d  Defer subgoal-local intro wraps (real fix)
 7809323  cases + induction on indexed inductives (FVar-index restriction)
 af21325  revert tactic + add_comm via revert+induction
 b72c7ed  List.decEq for List Nat + no-confusion helpers
-(next)   Polymorphic List.decEq + match-on-inner-Lam-binder parser fix
+4a0d5fb  Polymorphic List.decEq + match-on-inner-Lam-binder parser fix
+(next)   List theorems: length_map, map_append, map_compose
 ```
 
 ### `383b984` — initial commit
