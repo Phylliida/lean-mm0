@@ -11,10 +11,10 @@ outside the trust boundary.
 
 | | |
 |---|---|
-| Tests | **117 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 50 parser examples) |
-| Total source | ~7.0 kLoC Python + 188 LoC MM0 prelude + 2897 LoC `.lean` examples (50 files) |
+| Tests | **118 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 51 parser examples) |
+| Total source | ~7.0 kLoC Python + 188 LoC MM0 prelude + 2976 LoC `.lean` examples (51 files) |
 | Trusted base | `src/mm0_verify.py` (710 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 65 commits on `master`; clean working tree |
+| Repo | 67 commits on `master`; clean working tree |
 
 ## What the pipeline does
 
@@ -77,12 +77,12 @@ lean-mm0/
 │   │                   instance synth (backtracking), tactics
 │   ├── emitter.py      kernel derivation → MM0 proof text
 │   └── mm0_verify.py   ← TRUSTED: MM0 s-expression verifier (710 LoC)
-├── examples/           50 .lean files (2897 LoC) that compile + verify
+├── examples/           51 .lean files (2976 LoC) that compile + verify
 ├── tests/
 │   ├── test_kernel_smoke.py   (7 tests)
 │   ├── test_emit_basic.py     (3 tests)
 │   ├── suite.py               (57 tests across 14 categories)
-│   └── test_parser.py         (50 .lean examples, each round-tripped)
+│   └── test_parser.py         (51 .lean examples, each round-tripped)
 └── run_all.py          single entry point: runs all 4 test files
 ```
 
@@ -188,7 +188,7 @@ accept something false — only reject something true.
 
 ## What's been built (chronological)
 
-65 commits — feature commits + HANDOFF updates interleaved:
+67 commits — feature commits + HANDOFF updates interleaved:
 
 ```
 383b984  Initial commit: lean-mm0 prototype
@@ -259,7 +259,7 @@ dfd669d  Nat ordering chain: pred_le_pred → lt_irrefl → le_antisymm
 0cb1459  HANDOFF: patch hash for nat ordering chain commit
 7b21dbd  Nat.le_total: total order via double induction + cases on Or
 db70aac  HANDOFF: refresh after le_total
-(next)   Nat.decLe / Nat.decLt + min via if (instance synthesis works)
+07cd03f  Nat.decLe / Nat.decLt + min via if (instance synthesis works)
 ```
 
 ### `383b984` — initial commit
