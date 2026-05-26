@@ -632,10 +632,11 @@ Pieces ordered by impact and tractability:
    `succ_le_succ`, `lt_succ_self`, `lt_succ_of_lt`, `le_of_lt`
    (`nat_le_more.lean`); `Nat.le_zero`, `Nat.not_succ_le_zero` via
    the `induction` tactic with index unification (`index_unif.lean`);
-   `Nat.pred_le_pred`, `Nat.lt_irrefl`, `Nat.le_antisymm`
-   (`nat_le_chain.lean`).  Open: `Nat.le_total` (forall m n, Le m n ∨
-   Le n m — needs `Or` in stdlib first); then standard chain of
-   decidable comparisons.
+   `Nat.pred_le_pred`, `Nat.lt_irrefl`, `Nat.le_antisymm`,
+   `Nat.le_total` (`nat_le_chain.lean`).  Open: `Decidable (Le m n)`
+   (would chain nicely off pred_le_pred + zero_le + not_succ_le_zero,
+   but needs nested-match structural recursion to work — currently
+   only single-match outer recursion is detected).
 
 2. **More Decidable instances** — `And` / `Or` / `Not`, `Nat.decEq`,
    `Bool.decEq`, mono + polymorphic `List.decEq` are done.  Open:

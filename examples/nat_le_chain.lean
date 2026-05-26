@@ -101,3 +101,38 @@ theorem Nat.le_antisymm : (m : Nat) -> (n : Nat) ->
 
 example : Eq.{1} Nat 3 3 :=
   Nat.le_antisymm 3 3 (Nat.le.refl 3) (Nat.le.refl 3)
+
+-- ============================================================
+-- Nat.le_total: for all m n, Le m n ∨ Le n m.  Double induction on
+-- m, then n; the inner case-split uses `cases` on the outer IH's Or.
+-- ============================================================
+
+theorem Nat.le_total : (m : Nat) -> (n : Nat) ->
+    Or (Nat.le m n) (Nat.le n m) :=
+  by intro m; induction m;
+     -- base m=0: Or.inl (zero_le n).
+     intro n;
+     apply Or.inl;
+     apply Nat.zero_le;
+     -- step m=succ k: ih : Π n, Or (Le k n) (Le n k).
+     intro k; intro ih; intro n;
+     induction n;
+     -- n=0: Or.inr (zero_le (succ k)).
+     apply Or.inr;
+     apply Nat.zero_le;
+     -- n=succ j: ih_n unused; case split on (ih j).
+     intro j; intro ih_n;
+     cases (ih j);
+     -- inl: Le k j → Le (succ k) (succ j) via succ_le_succ.
+     intro h_kj;
+     apply Or.inl;
+     apply Nat.succ_le_succ;
+     exact h_kj;
+     -- inr: Le j k → Le (succ j) (succ k) via succ_le_succ.
+     intro h_jk;
+     apply Or.inr;
+     apply Nat.succ_le_succ;
+     exact h_jk
+
+example : Or (Nat.le 3 5) (Nat.le 5 3) := Nat.le_total 3 5
+example : Or (Nat.le 5 3) (Nat.le 3 5) := Nat.le_total 5 3
