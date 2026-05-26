@@ -198,6 +198,16 @@ def test_parse_and_verify_induction_auto_revert():
     _run_example("induction_auto_revert.lean")
 
 
+def test_parse_and_verify_nat_le_chain():
+    # pred_le_pred + lt_irrefl, exercising index unification and
+    # auto-revert for `induction`.  Depends on nat_le, nat_lt for
+    # base lemmas, nat_inj for succ_inj, index_unif for
+    # not_succ_le_zero.
+    _run_example("nat_inj.lean", "nat_le.lean", "nat_lt.lean",
+                 "nat_le_more.lean", "index_unif.lean",
+                 "nat_le_chain.lean")
+
+
 def test_parse_and_verify_revert():
     # revert example uses zero_add, succ_add, lift_succ from
     # math.lean / nat_lemmas.lean.
