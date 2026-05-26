@@ -253,7 +253,7 @@ d20de9c  Index unification for induction + name-based tactic-arg resolution
 8ec2b9c  HANDOFF: comprehensive refresh after index-unif + simp + name-resolver
 e37c491  Indexed-inductive match v2: recursive ctors (Nat.le.step, Vec.cons)
 1413fe0  HANDOFF: patch chronological hash for indexed-match v2 commit
-(next)   Auto-revert for `induction`: pulls dependent intros into G
+209769a  Auto-revert for `induction`: pulls dependent intros into G
 ```
 
 ### `383b984` — initial commit
