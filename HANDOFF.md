@@ -251,7 +251,7 @@ b72c7ed  List.decEq for List Nat + no-confusion helpers
 d9765ce  @[simp] attribute + env-collected lemma database + unify match
 d20de9c  Index unification for induction + name-based tactic-arg resolution
 8ec2b9c  HANDOFF: comprehensive refresh after index-unif + simp + name-resolver
-(next)   Indexed-inductive match v2: recursive ctors (Nat.le.step, Vec.cons)
+e37c491  Indexed-inductive match v2: recursive ctors (Nat.le.step, Vec.cons)
 ```
 
 ### `383b984` — initial commit
