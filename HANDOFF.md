@@ -255,7 +255,7 @@ e37c491  Indexed-inductive match v2: recursive ctors (Nat.le.step, Vec.cons)
 1413fe0  HANDOFF: patch chronological hash for indexed-match v2 commit
 209769a  Auto-revert for `induction`: pulls dependent intros into G
 55bbcdc  HANDOFF: patch chronological hash for auto-revert commit
-(next)   Nat ordering chain: pred_le_pred → lt_irrefl → le_antisymm
+dfd669d  Nat ordering chain: pred_le_pred → lt_irrefl → le_antisymm
 ```
 
 ### `383b984` — initial commit
