@@ -793,7 +793,9 @@ class Elaborator:
         return self.mctx.instantiate(term)
 
     def _run_tactic(self, tac: tuple, goal: Expr,
-                    ctx: LocalCtx) -> Tuple[Expr, List[int]]:
+                    ctx: LocalCtx,
+                    focused_intros: Optional[list] = None
+                    ) -> Tuple[Expr, List[int]]:
         kind = tac[0]
         if kind == "rfl":
             # Goal must be `Eq.{u} α a b` with a ≡ b (defeq).
@@ -1043,6 +1045,60 @@ class Elaborator:
             index_args = list(ind_args[n_params:n_params + n_indices])
             ind_lvls = head.levels
             G = self.mctx.instantiate(goal)
+            # ---- auto-revert dependent hypotheses ----
+            # Scan ctx for entries (later than the scrutinee) whose type
+            # references the scrutinee or any FVar-index of its type, and
+            # pull them back into G as Π binders.  Transitively pulls in
+            # dependents-of-dependents.  Without this, `le_antisymm`-style
+            # proofs that have `h2 : Nat.le m n` alongside the `h1 : Nat.le
+            # n m` we're inducting on would require manual `revert h2`
+            # first.
+            watch_fvars = {scrut_e.name}
+            for ia in index_args:
+                if isinstance(ia, FVar):
+                    watch_fvars.add(ia.name)
+            scrut_ctx_idx = next(
+                (i for i, e in enumerate(ctx.entries)
+                 if e[0] == scrut_e.name), None)
+            revert_list: list = []   # innermost-first: (fv_name, ty)
+            if scrut_ctx_idx is not None:
+                for i in range(len(ctx.entries) - 1, scrut_ctx_idx, -1):
+                    en_name, en_ty, _ = ctx.entries[i]
+                    if any(_references_fvar(en_ty, w)
+                           for w in watch_fvars):
+                        revert_list.append((en_name, en_ty))
+                        watch_fvars.add(en_name)
+            # Only auto-revert hypotheses that were intro'd in the
+            # CURRENT by-block (i.e., are present in focused_intros).
+            # Pre-existing def/theorem binders are baked into the
+            # surrounding term's expected type — we cannot pull them
+            # back into G without breaking that expected shape.
+            focused_fv_names = (
+                {fi[2] for fi in focused_intros}
+                if focused_intros is not None else set())
+            for fv_name, _ in revert_list:
+                if fv_name not in focused_fv_names:
+                    raise ElabError(
+                        f"induction: hypothesis {fv_name!r} depends on "
+                        f"the scrutinee or one of its indices, but was "
+                        f"introduced outside this `by` block (as a def/"
+                        f"theorem binder).  Restructure so the dependent "
+                        f"hypothesis is `intro`'d inside the `by` block "
+                        f"before `induction`, e.g. write the def's type "
+                        f"as a Π and intro all binders first.")
+            # Pop from ctx + focused_intros and wrap G with Π for each.
+            # Innermost-first → first wrap becomes innermost Π in G, so
+            # the final outer Π order matches the original ctx order.
+            for fv_name, fv_ty in revert_list:
+                pop_idx = next(
+                    j for j in range(len(ctx.entries) - 1, -1, -1)
+                    if ctx.entries[j][0] == fv_name)
+                del ctx.entries[pop_idx]
+                G = Pi(fv_name, fv_ty, close(G, fv_name, 0))
+                for fi in range(len(focused_intros) - 1, -1, -1):
+                    if focused_intros[fi][2] == fv_name:
+                        del focused_intros[fi]
+                        break
             # Compute the inductive's index types up front so we know
             # T_i for every concrete index that needs unification.
             if n_indices > 0:
@@ -1611,7 +1667,11 @@ class Elaborator:
                         close(focused_goal, rev_fv, 0))
                     continue
                 # Non-intro tactic: produce a term for the focused goal.
-                term, sub_metas = self._run_tactic(tac, focused_goal, ctx)
+                # Pass focused_intros so that auto-revert (in `induction`)
+                # can prune the list when it pulls an intro back into G.
+                term, sub_metas = self._run_tactic(
+                    tac, focused_goal, ctx,
+                    focused_intros=focused_intros)
                 term = self.mctx.instantiate(term)
                 if focused_is_main:
                     # Defer wrapping the main intros — leave them pushed

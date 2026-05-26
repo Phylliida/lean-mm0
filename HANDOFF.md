@@ -11,10 +11,10 @@ outside the trust boundary.
 
 | | |
 |---|---|
-| Tests | **115 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 48 parser examples) |
-| Total source | ~7.0 kLoC Python + 188 LoC MM0 prelude + 2691 LoC `.lean` examples (48 files) |
+| Tests | **116 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 49 parser examples) |
+| Total source | ~7.0 kLoC Python + 188 LoC MM0 prelude + 2758 LoC `.lean` examples (49 files) |
 | Trusted base | `src/mm0_verify.py` (710 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 60 commits on `master`; clean working tree |
+| Repo | 62 commits on `master`; clean working tree |
 
 ## What the pipeline does
 
@@ -77,12 +77,12 @@ lean-mm0/
 │   │                   instance synth (backtracking), tactics
 │   ├── emitter.py      kernel derivation → MM0 proof text
 │   └── mm0_verify.py   ← TRUSTED: MM0 s-expression verifier (710 LoC)
-├── examples/           48 .lean files (2691 LoC) that compile + verify
+├── examples/           49 .lean files (2758 LoC) that compile + verify
 ├── tests/
 │   ├── test_kernel_smoke.py   (7 tests)
 │   ├── test_emit_basic.py     (3 tests)
 │   ├── suite.py               (57 tests across 14 categories)
-│   └── test_parser.py         (48 .lean examples, each round-tripped)
+│   └── test_parser.py         (49 .lean examples, each round-tripped)
 └── run_all.py          single entry point: runs all 4 test files
 ```
 
@@ -188,7 +188,7 @@ accept something false — only reject something true.
 
 ## What's been built (chronological)
 
-60 commits — feature commits + HANDOFF updates interleaved:
+62 commits — feature commits + HANDOFF updates interleaved:
 
 ```
 383b984  Initial commit: lean-mm0 prototype
@@ -252,6 +252,8 @@ d9765ce  @[simp] attribute + env-collected lemma database + unify match
 d20de9c  Index unification for induction + name-based tactic-arg resolution
 8ec2b9c  HANDOFF: comprehensive refresh after index-unif + simp + name-resolver
 e37c491  Indexed-inductive match v2: recursive ctors (Nat.le.step, Vec.cons)
+1413fe0  HANDOFF: patch chronological hash for indexed-match v2 commit
+(next)   Auto-revert for `induction`: pulls dependent intros into G
 ```
 
 ### `383b984` — initial commit
@@ -605,7 +607,7 @@ Compared to a production Lean / mathlib stack, the major missing pieces:
 | `rewrite` / `rw` tactic | implemented (builds `Eq.rec` with motive abstracting LHS; β-normalises the goal so it works inside recursor minors) | — |
 | `apply` tactic | implemented; subgoals carry ctx snapshots and survive intro/seq context switches | — |
 | `cases` tactic | implemented (v1+v2 for non-indexed, v3 for indexed with non-dependent motive).  Real dependent index-case-analysis (with index unification) is on `induction`, not `cases` | — |
-| `induction` tactic | implemented (`examples/induction.lean`, `examples/indexed_cases.lean`, `examples/index_unif.lean`): dependent motive, IH typed at the recursive sub-term.  Works for Nat, Bool, List, **and indexed inductives like Nat.le including concrete indices via index unification**.  Subgoal-local intros chained through further `apply`s + `exact <fvar>` close correctly (wrap deferred to end-of-seq).  Auto-revert of dependent hypotheses not done — user must `revert` manually | — |
+| `induction` tactic | implemented (`examples/induction.lean`, `examples/indexed_cases.lean`, `examples/index_unif.lean`, `examples/induction_auto_revert.lean`): dependent motive, IH typed at the recursive sub-term.  Works for Nat, Bool, List, **and indexed inductives like Nat.le including concrete indices via index unification**.  Subgoal-local intros chained through further `apply`s + `exact <fvar>` close correctly (wrap deferred to end-of-seq).  **Auto-reverts dependent hypotheses** (anything in focused_intros that mentions the scrutinee or its FVar indices, transitively); the user re-intros them in each branch with the specialised type.  Def/theorem binders that depend can't be auto-reverted — restructure the proof to intro them inside the `by` block first | — |
 | `revert` tactic | implemented (`examples/revert.lean`) — `revert h` pulls an intro back into the goal as a leading Π.  Naturally pairs with `induction` to generalise a hypothesis before inducting on another | — |
 | `simp` tactic | implemented (`examples/simp.lean`): `simp [extras]` uses env-collected `@[simp]` lemmas + extras; peels Π binders into metas; unifies LHS against goal subterms; iterates to fixpoint and tries `rfl` | No congruence rules and no simp normal-form heuristics — significant additional infra |
 | Full `match` syntax in `def` (`def f \| 0 => 0 \| succ k => k`) | not implemented | needs equation compiler |
@@ -646,23 +648,16 @@ Pieces ordered by impact and tractability:
    filling), unfolding of selected defs.  Substantial, but each piece
    is bounded.
 
-4. **Auto-revert for `induction`** — when a hypothesis depends on the
-   thing we're inducting over, Lean's `induction` auto-reverts it so
-   the abstraction works.  We currently require the user to `revert`
-   manually before `induction`.  Adding auto-revert would let
-   `le_antisymm` (which has `h2 : Nat.le m n` alongside the `h1` we
-   induct on, where both `m` and `n` are FVars) be written naturally.
-
-5. **Notation/macro system** — Generalise `infix` to arbitrary mixfix
+4. **Notation/macro system** — Generalise `infix` to arbitrary mixfix
    notation like `notation:50 "[" a "," b "]" => Prod.mk a b`.
    Needs a more flexible token-pattern parser.  Would dramatically
    improve example readability.
 
-6. **Mutual inductives' cross-recursor** — Compile mutual `inductive`
+5. **Mutual inductives' cross-recursor** — Compile mutual `inductive`
    blocks to a single tag-discriminated inductive, generate a
    cross-recursor.  Substantial.
 
-7. **Lean elaborator-compat layer** — Read actual `.lean` files from
+6. **Lean elaborator-compat layer** — Read actual `.lean` files from
    Lean 4 source by being more permissive about syntax (newlines as
    separators, more notation forms).  Real Lean files require
    elaborator features that aren't trivially in scope, but a useful

@@ -194,6 +194,10 @@ def test_parse_and_verify_idx_match_rec():
     _run_example("idx_match_rec.lean")
 
 
+def test_parse_and_verify_induction_auto_revert():
+    _run_example("induction_auto_revert.lean")
+
+
 def test_parse_and_verify_revert():
     # revert example uses zero_add, succ_add, lift_succ from
     # math.lean / nat_lemmas.lean.
