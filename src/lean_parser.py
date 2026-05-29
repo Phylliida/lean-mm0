@@ -1066,12 +1066,16 @@ class P:
             # continue with the rest of the seq.  At end of seq the term
             # gets a `let h : T := e in <term>` wrap around the whole
             # main term (in chronological order with any intros).
+            # Also accepts `have h := e` (no type annotation): the type
+            # is inferred from e at elaboration time (stored as None).
             self.take()
             name_tok = self.take()
             if name_tok.kind != "id":
                 raise SyntaxError("have expects a name")
-            self.eat(":")
-            ty = self.parse_expr(lvl_params, bvar_stack)
+            ty: Optional[Expr] = None
+            if self.at(":"):
+                self.take()
+                ty = self.parse_expr(lvl_params, bvar_stack)
             self.eat(":=")
             val = self.parse_expr(lvl_params, bvar_stack)
             return ("have", name_tok.text, ty, val, list(bvar_stack))

@@ -50,3 +50,22 @@ theorem zero_add_via_have : (n : Nat) -> Eq.{1} Nat (Nat.add 0 n) n :=
      exact h
 
 example : Eq.{1} Nat (Nat.add 0 5) 5 := zero_add_via_have 5
+
+-- ============================================================
+-- `have h := e` without type annotation: the type is inferred from
+-- the value at elaboration time.  Saves typing for obvious cases.
+-- ============================================================
+
+def have_no_ty : Nat :=
+  by have x := 42;
+     exact x
+
+example : Eq.{1} Nat have_no_ty 42 := by rfl
+
+-- Inferred type from a complex expression: Eq Nat (m+n) (n+m).
+theorem zero_add_inferred : (n : Nat) -> Eq.{1} Nat (Nat.add 0 n) n :=
+  by intro n;
+     have h := zero_add n;
+     exact h
+
+example : Eq.{1} Nat (Nat.add 0 3) 3 := zero_add_inferred 3

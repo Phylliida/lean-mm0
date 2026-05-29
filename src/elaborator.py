@@ -1665,17 +1665,24 @@ class Elaborator:
                     focused_goal = open_(goal_w.body, FVar(fv, dom))
                     continue
                 if tac[0] == "have":
-                    # `have h : T := e` — elaborate T and e (against T),
-                    # push (h, T, e) onto ctx as a let-binding, and
-                    # continue.  At end of seq the term gets a `Let`
-                    # wrap around it (in chronological order with intros).
+                    # `have h : T := e` or `have h := e`.  In the second
+                    # form, T is inferred from elaborating e without an
+                    # expected type.  Push (h, T, e) onto ctx as a let-
+                    # binding and continue.  At end of seq the term gets
+                    # a `Let` wrap (in chronological order with intros).
                     _, h_name, ty_raw, val_raw, h_bvar_stack = tac
-                    ty_r = _resolve_bvars_named(ty_raw, h_bvar_stack, ctx)
                     val_r = _resolve_bvars_named(val_raw, h_bvar_stack, ctx)
-                    ty_e, _ = self.elab(ty_r, None, ctx)
-                    ty_e = self.mctx.instantiate(ty_e)
-                    val_e, _ = self.elab(val_r, ty_e, ctx)
-                    val_e = self.mctx.instantiate(val_e)
+                    if ty_raw is None:
+                        val_e, ty_e = self.elab(val_r, None, ctx)
+                        val_e = self.mctx.instantiate(val_e)
+                        ty_e = self.mctx.instantiate(ty_e)
+                    else:
+                        ty_r = _resolve_bvars_named(
+                            ty_raw, h_bvar_stack, ctx)
+                        ty_e, _ = self.elab(ty_r, None, ctx)
+                        ty_e = self.mctx.instantiate(ty_e)
+                        val_e, _ = self.elab(val_r, ty_e, ctx)
+                        val_e = self.mctx.instantiate(val_e)
                     fv = ctx.push(h_name, ty_e, val_e)
                     focused_haves.append((h_name, ty_e, val_e, fv))
                     focused_order.append(fv)

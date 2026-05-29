@@ -162,7 +162,7 @@ What the parser accepts and the elaborator handles:
 | `revert h` | inverse of `intro`: pulls a hypothesis intro'd earlier in the same `by` block back into the goal as a leading Π binder.  Pops the entry from ctx, closes the goal over its FVar, wraps with Π.  Refuses if a later intro depends on `h` (revert that one first).  Only works on intros, not on theorem binders |
 | `simp [e1, …, en]` | iterates rewriting with both env-collected `@[simp]` lemmas and the per-call extras until no lemma fires, then tries `rfl`.  Lemmas may be universally quantified — simp peels their Π binders into fresh metas each iteration and unifies the LHS against goal subterms.  On match, instantiate metas and do the rewrite.  Bounded to 200 iterations |
 | `@[simp]` on a decl | registers the decl in `env.simp_lemmas`; subsequent `simp` calls auto-include it.  Apply to `theorem`s whose conclusion is `Eq α a b` (after peeling Πs) |
-| `have h : T := e` | introduces an intermediate hypothesis named h of type T (proved by e) into the local context.  Deferred-wrapped as a `Let` around the main term at end of seq, interleaved chronologically with intros (so `intro x; have h := f x; intro y; …` produces `λx. let h := f x in λy. …`) |
+| `have h : T := e` / `have h := e` | introduces an intermediate hypothesis named h of type T (proved by e) into the local context.  Type annotation is optional — without it, T is inferred from e.  Deferred-wrapped as a `Let` around the main term at end of seq, interleaved chronologically with intros (so `intro x; have h := f x; intro y; …` produces `λx. let h := f x in λy. …`) |
 
 ## Trust boundary detail
 
