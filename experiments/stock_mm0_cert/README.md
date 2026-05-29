@@ -1,10 +1,16 @@
 # Prototype: a certifying emitter (CIC → stock MM0)
 
-**Status:** working proof-of-concept for **substitution, β, and ι
-(recursors)** — all generating stock-MM0 certificates that `mm0-rs` *and*
-`mm0-c` verify.  Fully-concrete ground numerals (`1+1=2`) are blocked by an
-α-renaming wall in the *named-binder* `lean.mm1` prelude (see Findings) —
-the fix is a **de-Bruijn** prelude matching our own verifier.
+**Status:** working proof-of-concept generating stock-MM0 certificates that
+`mm0-rs` *and* `mm0-c` verify, for substitution, β, ι (recursors), and —
+via a **de-Bruijn prelude** (`db.mm1`) — **fully-concrete ground numerals
+including `1+1=2`**, with `shift`/`subst1` *proven* (out of the trusted
+base) rather than computed.
+
+Two tracks:
+- **`lean.mm1` (named binders):** Layers 1–3 (`cert*.py`) — subst, β, ι with
+  abstract algebra.  Hits an α-wall on concrete numerals (see Findings).
+- **`db.mm1` (de Bruijn):** the wall-free track (`db_cert.py`) — reaches
+  concrete ground computations end-to-end.  **This is the real path.**
 
 ## Why
 
@@ -65,6 +71,22 @@ are the generated, arbitrary-depth version of experiment #1's hand-written
 `ground_two_steps`.  Certificate size grows linearly per reduction step
 (~27 nodes / recursor step); checking is trivially fast.
 
+### De-Bruijn track (`db.mm1`) — concrete ground computations
+
+These reach a *real* numeral result — what the named track could not — with
+`shift`/`subst1` proven, not built in (`run_db.py`):
+
+| computation | normal form | nodes | ours |
+|---|---|---|---|
+| `rec (λ_.N) 0 (λk ih. S ih) (S 0)` | `1` | 37 | 1 |
+| same on `S S 0` | `2` | 75 | 1 |
+| **`add 1 1`** (2 outer β + ι + inner β) | **`2`** | 92 | 1 |
+| `add 2 1` | `3` | 98 | 1 |
+
+`add = λm.λn. rec (λ_.N) m (λk.λih. S ih) n`.  Verified by mm0-rs and the
+minimal mm0-c kernel.  No α anywhere (de Bruijn has no binder names), so the
+emitter needs no fresh-naming tricks — the wall simply doesn't exist.
+
 ## Run
 
 Requires the sibling `mm0` clone built (`mm0-rs` + `mm0-c`):
@@ -74,9 +96,10 @@ mm0-c:   cd ../../../mm0/mm0-c && gcc main.c -O2 -D NO_PARSER -o mm0-c-np
 ```
 Then:
 ```
-python3 run_layer1.py      # substitution certificates
-python3 run_layer2.py      # beta certificates
-python3 run_iota.py        # recursor (iota) certificates
+python3 run_layer1.py      # substitution certificates   (lean.mm1 track)
+python3 run_layer2.py      # beta certificates           (lean.mm1 track)
+python3 run_iota.py        # recursor (iota), abstract   (lean.mm1 track)
+python3 run_db.py          # concrete numerals, 1+1=2    (de-Bruijn track)
 ```
 Each prints the generated `.mm1`, a node-count table, and the verdict from
 both checkers.  Generated fragments land in `_gen_layer{1,2}.mm1`.
@@ -102,25 +125,35 @@ no α — which is precisely why it sidesteps this.**  So the concrete path is:
 
 ## Roadmap
 
-1. **De-Bruijn stock-MM0 prelude.**  Re-encode CIC with de Bruijn indices
-   (like our `prelude/cic.mm0`), but with `shift` / `subst1` as *axiomatised
-   provable relations* (per-constructor axioms) instead of trusted builtins.
-   This eliminates α entirely and moves `shift`/`subst1` out of the trusted
-   base.  The emitter already thinks in de-Bruijn-ish terms, so this is the
-   natural target and unblocks concrete numerals (`four_eq`).
-2. **δ.**  Wire in MM0 statement-level `def` unfolding (the one reduction
-   stock MM0 does natively).
-3. **Kernel integration.**  Read our `src/expr.py` CIC AST instead of the
-   hand-built terms here, i.e. replace `src/emitter.py`'s `de-refl`
-   shortcut with generated conversion certificates.
-
-The β/ι/subst generators here carry over directly; only the prelude's
-binder representation changes.
+1. ✅ **De-Bruijn stock-MM0 prelude** (`db.mm1`) with `shift`/`subst1` as
+   provable relations — DONE; reaches `1+1=2` (above).
+2. **Full CIC in the de-Bruijn prelude.**  `db.mm1` is deliberately small:
+   untyped `deq`, Nat hard-wired as opaque constants, ι stated as untyped
+   axioms.  To be a real *trusted base* it needs the typing judgment
+   (`has_type` + the CIC rules, as in `prelude/cic.mm0`) and ι gated on
+   typing (or the general inductive machinery).  The reduction certificates
+   here carry over unchanged; this adds the typing layer around them.
+3. **δ.**  MM0 statement-level `def` unfolding (the one reduction stock MM0
+   does natively) for our `def`s.
+4. **Kernel integration.**  Drive the emitter from our `src/expr.py` CIC AST
+   (it already maps onto these de-Bruijn terms), replacing `src/emitter.py`'s
+   `de-refl` shortcut with generated conversion certificates — at which point
+   the verifier's βιζ + shift/subst1 evaluator can leave the trusted base.
 
 ## Files
+
+**`lean.mm1` (named-binder) track:**
 - `cert.py` — term AST (incl. `Imp`, `NatRec`), pretty-printer, Layer-1
   substitution certifier.
 - `cert_beta.py` — Layer-2 typing certifier + whnf β-reducer.
 - `cert_iota.py` — Layer-3 recursor reducer (`norm_rec`).
-- `run_layer1.py`, `run_layer2.py`, `run_iota.py` — drivers (generate + check).
-- `_gen_layer1.mm1`, `_gen_layer2.mm1`, `_gen_iota.mm1` — last generated output.
+- `run_layer1.py`, `run_layer2.py`, `run_iota.py` — drivers.
+
+**`db.mm1` (de-Bruijn) track — the real path:**
+- `db.mm1` — de-Bruijn stock-MM0 prelude; `shift`/`subst1` as provable
+  relations, untyped `deq`.  Pure axioms (the trusted spec).
+- `db_cert.py` — certifying evaluator: `prove_shf` / `prove_sub` /
+  `prove_norm` (β + ι, full normalisation).
+- `run_db.py` — driver: concrete ground computations incl. `1+1=2`.
+
+Generated output (`_gen_*.mm1`) is gitignored.
