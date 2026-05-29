@@ -125,3 +125,79 @@ theorem some_inj.{u} {α : Sort u} (a b : α)
        Eq.{u} α a (@option_unwrap.{u} α a k))
     (Eq.refl.{u} α a)
     (Option.some.{u} α b) h
+
+-- ============================================================
+-- Decidable equality on Option α, polymorphic over the element
+-- decision function.  Two nested matches on x and y, then
+-- Decidable.rec on the element-level decision for the some-some case.
+-- ============================================================
+
+def Option.decEq.{u} {α : Sort u}
+    (αDecEq : (a : α) -> (b : α) -> Decidable (Eq.{u} α a b))
+    (x : Option.{u} α) (y : Option.{u} α) :
+    Decidable (Eq.{u} (Option.{u} α) x y) :=
+  match (motive := fun (y1 : Option.{u} α) =>
+           Decidable (Eq.{u} (Option.{u} α) x y1)) y with
+  | Option.none =>
+    (match (motive := fun (x1 : Option.{u} α) =>
+             Decidable (Eq.{u} (Option.{u} α) x1 (Option.none.{u} α))) x with
+    | Option.none =>
+      Decidable.isTrue
+        (Eq.{u} (Option.{u} α) (Option.none.{u} α) (Option.none.{u} α))
+        (Eq.refl.{u} (Option.{u} α) (Option.none.{u} α))
+    | Option.some a =>
+      Decidable.isFalse
+        (Eq.{u} (Option.{u} α) (Option.some.{u} α a) (Option.none.{u} α))
+        (some_ne_none.{u} a))
+  | Option.some b =>
+    (match (motive := fun (x1 : Option.{u} α) =>
+             Decidable (Eq.{u} (Option.{u} α) x1 (Option.some.{u} α b))) x with
+    | Option.none =>
+      Decidable.isFalse
+        (Eq.{u} (Option.{u} α) (Option.none.{u} α) (Option.some.{u} α b))
+        (none_ne_some.{u} b)
+    | Option.some a =>
+      @Decidable.rec.{1} (Eq.{u} α a b)
+        (fun (_ : Decidable (Eq.{u} α a b)) =>
+           Decidable (Eq.{u} (Option.{u} α)
+             (Option.some.{u} α a) (Option.some.{u} α b)))
+        (fun (h_neg : Not (Eq.{u} α a b)) =>
+          Decidable.isFalse
+            (Eq.{u} (Option.{u} α)
+              (Option.some.{u} α a) (Option.some.{u} α b))
+            (fun (h_eq : Eq.{u} (Option.{u} α)
+                                (Option.some.{u} α a) (Option.some.{u} α b)) =>
+              h_neg (some_inj.{u} a b h_eq)))
+        (fun (h_pos : Eq.{u} α a b) =>
+          Decidable.isTrue
+            (Eq.{u} (Option.{u} α)
+              (Option.some.{u} α a) (Option.some.{u} α b))
+            (@Eq.rec.{u, 0} α a
+              (fun (x : α) (_ : Eq.{u} α a x) =>
+                 Eq.{u} (Option.{u} α)
+                        (Option.some.{u} α a) (Option.some.{u} α x))
+              (Eq.refl.{u} (Option.{u} α) (Option.some.{u} α a))
+              b h_pos))
+        (αDecEq a b))
+
+-- Sanity: with Nat.decEq.
+example : Eq.{1} Nat
+    (@ite.{1} Nat
+       (Eq.{1} (Option.{1} Nat) (Option.some.{1} Nat 3) (Option.some.{1} Nat 3))
+       (Option.decEq.{1} Nat.decEq (Option.some.{1} Nat 3) (Option.some.{1} Nat 3))
+       99 0)
+    99 := by rfl
+
+example : Eq.{1} Nat
+    (@ite.{1} Nat
+       (Eq.{1} (Option.{1} Nat) (Option.some.{1} Nat 3) (Option.some.{1} Nat 4))
+       (Option.decEq.{1} Nat.decEq (Option.some.{1} Nat 3) (Option.some.{1} Nat 4))
+       99 0)
+    0 := by rfl
+
+example : Eq.{1} Nat
+    (@ite.{1} Nat
+       (Eq.{1} (Option.{1} Nat) (Option.none.{1} Nat) (Option.none.{1} Nat))
+       (Option.decEq.{1} Nat.decEq (Option.none.{1} Nat) (Option.none.{1} Nat))
+       99 0)
+    99 := by rfl

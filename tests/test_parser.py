@@ -258,7 +258,9 @@ def test_parse_and_verify_decidable_eq_chain():
 
 
 def test_parse_and_verify_option_ops():
-    _run_example("option_ops.lean")
+    # Option utilities + Option.decEq.  Uses Nat.decEq for the
+    # sanity-check examples.
+    _run_example("nat_inj.lean", "nat_dec_eq.lean", "option_ops.lean")
 
 
 def test_parse_and_verify_revert():
