@@ -1005,6 +1005,19 @@ class P:
             return ("assumption",)
         if t.text in ("rewrite", "rw"):
             self.take()
+            if self.at("["):
+                # Multi-rewrite: rw [h1, h2, …] — chain rewrites with
+                # each operating on the previous residual subgoal.
+                self.take()
+                exprs: list = []
+                if not self.at("]"):
+                    exprs.append(self.parse_expr(lvl_params, bvar_stack))
+                    while self.at(","):
+                        self.take()
+                        exprs.append(
+                            self.parse_expr(lvl_params, bvar_stack))
+                self.eat("]")
+                return ("rewrite_many", exprs, list(bvar_stack))
             e = self.parse_expr(lvl_params, bvar_stack)
             return ("rewrite", e, list(bvar_stack))
         if t.text == "cases":

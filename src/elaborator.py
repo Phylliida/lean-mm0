@@ -792,6 +792,53 @@ class Elaborator:
             raise ElabError(f"unsolved subgoals after tactic block: {tys}")
         return self.mctx.instantiate(term)
 
+    def _do_rewrite(self, h_elab: Expr, h_ty: Expr,
+                     goal: Expr, ctx: LocalCtx
+                     ) -> Tuple[Expr, int, Expr]:
+        """Build the Eq.rec term that rewrites `a` to `b` (using h : Eq
+        α a b) in `goal`.  Returns (term solving goal, fresh sub-meta
+        id holding the rewritten goal, the rewritten-goal expr)."""
+        h_ty_w = self.kernel.whnf(self.mctx.instantiate(h_ty), ctx)
+        head, args = _spine(h_ty_w)
+        if not (isinstance(head, Const) and head.name == "Eq"
+                and len(args) == 3):
+            raise ElabError(
+                f"rewrite: hypothesis must have type `Eq α a b`, "
+                f"got {show_expr(h_ty_w)}")
+        α, a, b = args
+        u_level = head.levels[0]
+        G = _beta_norm(self.mctx.instantiate(goal))
+        G_ty_w = self.kernel.whnf(
+            self.mctx.instantiate(self._infer_elaborated(G, ctx)),
+            ctx)
+        if not isinstance(G_ty_w, Sort):
+            raise ElabError(
+                f"rewrite: goal's type is not a Sort: "
+                f"{show_expr(G_ty_w)}")
+        v_level = G_ty_w.level
+        G_shifted = shift(G, 2)
+        replaced, occurred = _replace_term(
+            G_shifted, shift(a, 2), BVar(1))
+        if not occurred:
+            raise ElabError(
+                f"rewrite: LHS {show_expr(a)} not found in goal "
+                f"{show_expr(G)}")
+        motive_body = replaced
+        inner_lam = Lam(
+            "_hp",
+            App(App(App(Const("Eq", (u_level,)), shift(α, 1)),
+                    shift(b, 1)), BVar(0)),
+            motive_body)
+        motive = Lam("a'", α, inner_lam)
+        sym_h = App(App(App(App(Const("Eq.symm", (u_level,)), α), a),
+                        b), h_elab)
+        new_goal, _ = _replace_term(G, a, b)
+        sub_meta = self.mctx.fresh(new_goal)
+        term = App(App(App(App(App(App(
+            Const("Eq.rec", (u_level, v_level)),
+            α), b), motive), sub_meta), a), sym_h)
+        return term, sub_meta.id, new_goal
+
     def _run_tactic(self, tac: tuple, goal: Expr,
                     ctx: LocalCtx,
                     focused_intros: Optional[list] = None,
@@ -1358,59 +1405,35 @@ class Elaborator:
             _, expr, _bvar_stack = tac
             expr_r = _resolve_bvars_named(expr, _bvar_stack, ctx)
             h_elab, h_ty = self.elab(expr_r, None, ctx)
-            h_ty_w = self.kernel.whnf(
-                self.mctx.instantiate(h_ty), ctx)
-            head, args = _spine(h_ty_w)
-            if not (isinstance(head, Const) and head.name == "Eq"
-                    and len(args) == 3):
-                raise ElabError(
-                    f"rewrite: hypothesis must have type `Eq α a b`, "
-                    f"got {show_expr(h_ty_w)}")
-            α, a, b = args
-            u_level = head.levels[0]
-            # β-normalise the goal so motive-applications coming out of a
-            # recursor minor (shape: `(λk. P k) (ctor args)`) become the
-            # literal `P[ctor args / k]` that structural search can scan.
-            G = _beta_norm(self.mctx.instantiate(goal))
-            # Determine v from the goal's type — the motive's body IS the
-            # goal (modulo the abstraction), so its level is the goal's.
-            G_ty_w = self.kernel.whnf(
-                self.mctx.instantiate(self._infer_elaborated(G, ctx)),
-                ctx)
-            if not isinstance(G_ty_w, Sort):
-                raise ElabError(
-                    f"rewrite: goal's type is not a Sort: "
-                    f"{show_expr(G_ty_w)}")
-            v_level = G_ty_w.level
-            # For v1 we only support `a` being a closed expression that
-            # appears in G by structural equality.  Walk G replacing each
-            # such occurrence with BVar(1) (which will be the motive's
-            # `a'` binder).
-            G_shifted = shift(G, 2)
-            replaced, occurred = _replace_term(
-                G_shifted, shift(a, 2), BVar(1))
-            if not occurred:
-                raise ElabError(
-                    f"rewrite: LHS {show_expr(a)} not found in goal "
-                    f"{show_expr(G)}")
-            motive_body = replaced                      # under 2 Lams: a', _hp
-            inner_lam = Lam(
-                "_hp",
-                # `Eq.{u} α b a'` at outer-Lam scope (one binder)
-                App(App(App(Const("Eq", (u_level,)), shift(α, 1)),
-                        shift(b, 1)), BVar(0)),
-                motive_body)
-            motive = Lam("a'", α, inner_lam)
-            sym_h = App(App(App(App(Const("Eq.symm", (u_level,)), α), a),
-                            b), h_elab)
-            # New subgoal type: G with `a` replaced by `b` (rewritten goal).
-            new_goal, _ = _replace_term(G, a, b)
-            sub_meta = self.mctx.fresh(new_goal)
-            term = App(App(App(App(App(App(
-                Const("Eq.rec", (u_level, v_level)),
-                α), b), motive), sub_meta), a), sym_h)
+            term, sub_meta_id, _new_goal = self._do_rewrite(
+                h_elab, h_ty, goal, ctx)
             ctx_snap = tuple(ctx.entries)
-            return term, [(sub_meta.id, ctx_snap)]
+            return term, [(sub_meta_id, ctx_snap)]
+
+        if kind == "rewrite_many":
+            # `rw [h1, h2, …]`: chain rewrites — each operates on the
+            # previous's residual subgoal.  The final residual becomes
+            # this tactic's single subgoal.
+            _, exprs, _bvar_stack = tac
+            if not exprs:
+                raise ElabError("rw []: empty rewrite list")
+            cur_goal = goal
+            overall_term: Optional[Expr] = None
+            prev_sub_id: Optional[int] = None
+            for expr in exprs:
+                expr_r = _resolve_bvars_named(expr, _bvar_stack, ctx)
+                h_elab, h_ty = self.elab(expr_r, None, ctx)
+                rw_term, sub_id, new_goal = self._do_rewrite(
+                    h_elab, h_ty, cur_goal, ctx)
+                if overall_term is None:
+                    overall_term = rw_term
+                else:
+                    self.mctx.assign(prev_sub_id,
+                                     self.mctx.instantiate(rw_term))
+                prev_sub_id = sub_id
+                cur_goal = new_goal
+            ctx_snap = tuple(ctx.entries)
+            return overall_term, [(prev_sub_id, ctx_snap)]
 
         if kind == "simp":
             # `simp [e1, e2, …]`: iterate rewriting with both env-collected
