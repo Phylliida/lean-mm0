@@ -141,6 +141,14 @@ def prove_norm(e: T):
         return App(f2, a2), _trans(c1, _app_cong(cf, ca))
     return wh, c1
 
+def prove_ht_nat(e: T) -> str:
+    """Proof of  ht G e tnat  for a numeral e (succ^n zero)."""
+    if e is TZERO:
+        return "(ht_zero)"
+    if isinstance(e, App) and e.f is TSUCC:
+        return f"(ht_app (ht_succ) {prove_ht_nat(e.a)} (sub_nat))"
+    raise ValueError(f"not a numeral: {pp(e)}")
+
 def proof_nodes(proof: str) -> int:
     import re
     return len(re.findall(r'[A-Za-z_]\w*', proof))

@@ -10,7 +10,9 @@ Two tracks:
 - **`lean.mm1` (named binders):** Layers 1–3 (`cert*.py`) — subst, β, ι with
   abstract algebra.  Hits an α-wall on concrete numerals (see Findings).
 - **`db.mm1` (de Bruijn):** the wall-free track (`db_cert.py`) — reaches
-  concrete ground computations end-to-end.  **This is the real path.**
+  concrete ground computations end-to-end, and now carries the **core CIC
+  typing judgment** so a *typed* theorem can route a reduction certificate
+  through `ht_conv`.  **This is the real path.**
 
 ## Why
 
@@ -87,6 +89,22 @@ These reach a *real* numeral result — what the named track could not — with
 minimal mm0-c kernel.  No α anywhere (de Bruijn has no binder names), so the
 emitter needs no fresh-naming tricks — the wall simply doesn't exist.
 
+### Typing layer (`db.mm1` + `run_db_typed.py`)
+
+`db.mm1` now carries the core CIC typing judgment `ht G e T` (`ht_sort`,
+`ht_var0`/`ht_weak`, `ht_pi`, `ht_lam`, `ht_app`, `ht_conv`) plus Nat as a
+typed primitive (`ht_nat`/`ht_zero`/`ht_succ`) — mirroring `prelude/cic.mm0`.
+This makes it a sound-core trusted base, not just a reduction relation.
+
+`run_db_typed.py` generates a *typed* theorem (106 nodes, checked by both):
+```
+db_typed (cP : Nat -> Sort lu) (h : cP (add 1 1))  ⊢  h : cP 2
+```
+The conclusion holds ONLY because `add 1 1 ≡ 2`; `ht_conv` consumes the
+92-node reduction certificate (the same one above) as its `def_eq` premise.
+So typing, conversion, and the reduction engine compose end-to-end in stock
+MM0 — with βιζ + shift + subst1 entirely outside the trusted core.
+
 ## Run
 
 Requires the sibling `mm0` clone built (`mm0-rs` + `mm0-c`):
@@ -100,6 +118,7 @@ python3 run_layer1.py      # substitution certificates   (lean.mm1 track)
 python3 run_layer2.py      # beta certificates           (lean.mm1 track)
 python3 run_iota.py        # recursor (iota), abstract   (lean.mm1 track)
 python3 run_db.py          # concrete numerals, 1+1=2    (de-Bruijn track)
+python3 run_db_typed.py    # typed theorem via ht_conv   (de-Bruijn track)
 ```
 Each prints the generated `.mm1`, a node-count table, and the verdict from
 both checkers.  Generated fragments land in `_gen_layer{1,2}.mm1`.
@@ -125,17 +144,17 @@ no α — which is precisely why it sidesteps this.**  So the concrete path is:
 
 ## Roadmap
 
-1. ✅ **De-Bruijn stock-MM0 prelude** (`db.mm1`) with `shift`/`subst1` as
-   provable relations — DONE; reaches `1+1=2` (above).
-2. **Full CIC in the de-Bruijn prelude.**  `db.mm1` is deliberately small:
-   untyped `deq`, Nat hard-wired as opaque constants, ι stated as untyped
-   axioms.  To be a real *trusted base* it needs the typing judgment
-   (`has_type` + the CIC rules, as in `prelude/cic.mm0`) and ι gated on
-   typing (or the general inductive machinery).  The reduction certificates
-   here carry over unchanged; this adds the typing layer around them.
-3. **δ.**  MM0 statement-level `def` unfolding (the one reduction stock MM0
-   does natively) for our `def`s.
-4. **Kernel integration.**  Drive the emitter from our `src/expr.py` CIC AST
+1. ✅ **De-Bruijn prelude** (`db.mm1`) with `shift`/`subst1` as provable
+   relations — reaches `1+1=2`.
+2. ✅ **Core CIC typing judgment** (`ht_*`) + a typed theorem via `ht_conv` —
+   `db.mm1` is now a sound-core trusted base, not just a reduction relation.
+3. **Recursor typing / inductives.**  Nat is currently a typed primitive and
+   ι is stated as an *untyped* `deq` axiom.  A fully rigorous base needs the
+   recursor's type (`ht_rec`) with ι gated on well-typedness (as in
+   `lean.mm1`'s `conv_iota`), or general inductive machinery.  The reduction
+   certificates carry over unchanged.
+4. **δ.**  MM0 statement-level `def` unfolding for our `def`s.
+5. **Kernel integration.**  Drive the emitter from our `src/expr.py` CIC AST
    (it already maps onto these de-Bruijn terms), replacing `src/emitter.py`'s
    `de-refl` shortcut with generated conversion certificates — at which point
    the verifier's βιζ + shift/subst1 evaluator can leave the trusted base.
@@ -150,10 +169,13 @@ no α — which is precisely why it sidesteps this.**  So the concrete path is:
 - `run_layer1.py`, `run_layer2.py`, `run_iota.py` — drivers.
 
 **`db.mm1` (de-Bruijn) track — the real path:**
-- `db.mm1` — de-Bruijn stock-MM0 prelude; `shift`/`subst1` as provable
-  relations, untyped `deq`.  Pure axioms (the trusted spec).
+- `db.mm1` — de-Bruijn stock-MM0 prelude: `shift`/`subst1` as provable
+  relations, untyped `deq` reduction, AND the core CIC typing judgment
+  (`ht_*`).  Pure axioms (the trusted spec).
 - `db_cert.py` — certifying evaluator: `prove_shf` / `prove_sub` /
-  `prove_norm` (β + ι, full normalisation).
-- `run_db.py` — driver: concrete ground computations incl. `1+1=2`.
+  `prove_norm` (β + ι) + `prove_ht_nat` (numeral typing).
+- `run_db.py` — concrete ground computations incl. `1+1=2`.
+- `run_db_typed.py` — a typed theorem routing a reduction cert through
+  `ht_conv`.
 
 Generated output (`_gen_*.mm1`) is gitignored.

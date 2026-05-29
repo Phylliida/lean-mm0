@@ -19,11 +19,17 @@ sort nat;
 term nO: nat;
 term nS: nat > nat;
 
+sort lvl;
+term lz: lvl;                         -- universe level 0
+term lS: lvl > lvl;                   -- successor level
+
 sort expr;
 term evar: nat > expr;
+term esort: lvl > expr;               -- Sort l   (the universes)
 term eapp: expr > expr > expr;
 infixl eapp: $@$ prec 100;
 term elam: expr > expr > expr;        -- elam DOMAIN BODY  (binder is positional)
+term epi:  expr > expr > expr;        -- epi  DOMAIN BODY  (dependent function type)
 term tnat: expr;                      -- the type Nat
 term tzero: expr;                     -- 0
 term tsucc: expr;                     -- succ  (succ n = eapp tsucc n)
@@ -53,6 +59,9 @@ axiom shf_app (f a f2 a2: expr) (d c: nat):
   $ shf f d c f2 $ > $ shf a d c a2 $ > $ shf (f @ a) d c (f2 @ a2) $;
 axiom shf_lam (t b t2 b2: expr) (d c: nat):
   $ shf t d c t2 $ > $ shf b d (nS c) b2 $ > $ shf (elam t b) d c (elam t2 b2) $;
+axiom shf_pi (t b t2 b2: expr) (d c: nat):
+  $ shf t d c t2 $ > $ shf b d (nS c) b2 $ > $ shf (epi t b) d c (epi t2 b2) $;
+axiom shf_sort (l: lvl) (d c: nat): $ shf (esort l) d c (esort l) $;
 axiom shf_var_0  (i d k: nat): $ padd i d k $ > $ shf (evar i) d nO (evar k) $;
 axiom shf_var_S0 (d c: nat): $ shf (evar nO) d (nS c) (evar nO) $;
 axiom shf_var_SS (i d c j: nat):
@@ -68,6 +77,9 @@ axiom sub_app (f a f2 a2 v: expr) (j: nat):
   $ sub f v j f2 $ > $ sub a v j a2 $ > $ sub (f @ a) v j (f2 @ a2) $;
 axiom sub_lam (t b t2 b2 v: expr) (j: nat):
   $ sub t v j t2 $ > $ sub b v (nS j) b2 $ > $ sub (elam t b) v j (elam t2 b2) $;
+axiom sub_pi (t b t2 b2 v: expr) (j: nat):
+  $ sub t v j t2 $ > $ sub b v (nS j) b2 $ > $ sub (epi t b) v j (epi t2 b2) $;
+axiom sub_sort (l: lvl) (v: expr) (j: nat): $ sub (esort l) v j (esort l) $;
 axiom sub_var_eq (v v2: expr) (j: nat): $ shf v j nO v2 $ > $ sub (evar j) v j v2 $;
 axiom sub_var_lt (i j: nat) (v: expr): $ nlt i j $ > $ sub (evar i) v j (evar i) $;
 axiom sub_var_gt (i j: nat) (v: expr): $ nlt j (nS i) $ > $ sub (evar (nS i)) v j (evar i) $;
@@ -88,3 +100,41 @@ axiom deq_iota_zero (g: ctx) (cC z s: expr):
 axiom deq_iota_succ (g: ctx) (cC z s k: expr):
   $ deq g (trec @ cC @ z @ s @ (tsucc @ k))
           (s @ k @ (trec @ cC @ z @ s @ k)) $;
+
+-- ============================================================
+-- Typing judgment  ht G e T   ( G |- e : T ),  core CIC rules.
+-- Mirrors prelude/cic.mm0; this is what makes db.mm1 a sound
+-- trusted base rather than just a reduction relation.
+-- ============================================================
+term ccons: expr > ctx > ctx;        -- context extension  G, T
+term lmax:  lvl > lvl > lvl;
+term limax: lvl > lvl > lvl;
+
+term ht: ctx > expr > expr > wff;
+
+-- Sort l : Sort (l+1)
+axiom ht_sort (g: ctx) (l: lvl): $ ht g (esort l) (esort (lS l)) $;
+-- variables (de Bruijn): #0 in (G,T) has type (shift1 T); weakening for #(i+1)
+axiom ht_var0 (g: ctx) (cT cT2: expr):
+  $ shf cT (nS nO) nO cT2 $ > $ ht (ccons cT g) (evar nO) cT2 $;
+axiom ht_weak (g: ctx) (cS cT cT2: expr) (i: nat):
+  $ ht g (evar i) cT $ > $ shf cT (nS nO) nO cT2 $ >
+  $ ht (ccons cS g) (evar (nS i)) cT2 $;
+-- Pi / lambda / application / conversion
+axiom ht_pi (g: ctx) (cA cB: expr) (u v: lvl):
+  $ ht g cA (esort u) $ > $ ht (ccons cA g) cB (esort v) $ >
+  $ ht g (epi cA cB) (esort (limax u v)) $;
+axiom ht_lam (g: ctx) (cA cb cB: expr) (u: lvl):
+  $ ht g cA (esort u) $ > $ ht (ccons cA g) cb cB $ >
+  $ ht g (elam cA cb) (epi cA cB) $;
+axiom ht_app (g: ctx) (f a cA cB cB2: expr):
+  $ ht g f (epi cA cB) $ > $ ht g a cA $ > $ sub cB a nO cB2 $ >
+  $ ht g (f @ a) cB2 $;
+axiom ht_conv (g: ctx) (t cT cT2: expr) (u: lvl):
+  $ ht g t cT $ > $ deq g cT cT2 $ > $ ht g cT2 (esort u) $ >
+  $ ht g t cT2 $;
+
+-- Nat as a typed primitive (Nat : Type, 0 : Nat, succ : Nat -> Nat)
+axiom ht_nat  (g: ctx): $ ht g tnat (esort (lS lz)) $;
+axiom ht_zero (g: ctx): $ ht g tzero tnat $;
+axiom ht_succ (g: ctx): $ ht g tsucc (epi tnat tnat) $;
