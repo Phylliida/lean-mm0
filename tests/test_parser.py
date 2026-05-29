@@ -247,6 +247,16 @@ def test_parse_and_verify_rw_multi():
     _run_example("rw_multi.lean")
 
 
+def test_parse_and_verify_decidable_eq_chain():
+    # DecidableEq for Bool and List (parametric over element DecidableEq).
+    # Uses Bool.decEq from bool_dec_eq, polymorphic List.decEq from
+    # list_dec_eq_poly, and the DecidableEq class from decidable_eq.
+    _run_example("nat_inj.lean", "nat_dec_eq.lean", "bool_dec_eq.lean",
+                 "list_dec_eq_poly.lean", "decidable_compose.lean",
+                 "list_mem.lean", "decidable_eq.lean",
+                 "decidable_eq_chain.lean")
+
+
 def test_parse_and_verify_revert():
     # revert example uses zero_add, succ_add, lift_succ from
     # math.lean / nat_lemmas.lean.
