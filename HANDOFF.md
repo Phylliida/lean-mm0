@@ -12,9 +12,10 @@ outside the trust boundary.
 | | |
 |---|---|
 | Tests | **126 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 59 parser examples) |
-| Total source | ~7.6 kLoC Python + 188 LoC MM0 prelude + 3339 LoC `.lean` examples (58 files) |
+| Total source | ~7.6 kLoC Python + 188 LoC MM0 prelude + 3542 LoC `.lean` examples (59 files) |
 | Trusted base | `src/mm0_verify.py` (710 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 81 commits on `master`; clean working tree |
+| Repo | 91 commits on `master`; clean working tree |
+| Dev shell | `shell.nix` provides PyPy + CPython + bootstrapped `.venv` with pytest + xdist; tests in ~1.5 min on a multi-core box |
 
 ## What the pipeline does
 
@@ -77,12 +78,15 @@ lean-mm0/
 │   │                   instance synth (backtracking), tactics
 │   ├── emitter.py      kernel derivation → MM0 proof text
 │   └── mm0_verify.py   ← TRUSTED: MM0 s-expression verifier (710 LoC)
-├── examples/           58 .lean files (3339 LoC) that compile + verify
+├── examples/           59 .lean files (3542 LoC) that compile + verify
 ├── tests/
 │   ├── test_kernel_smoke.py   (7 tests)
 │   ├── test_emit_basic.py     (3 tests)
 │   ├── suite.py               (57 tests across 14 categories)
 │   └── test_parser.py         (59 .lean examples, each round-tripped)
+├── scripts/
+│   └── profile_test.py    cProfile a single parser test; dumps .pstats
+├── shell.nix           Nix dev shell: PyPy + CPython + bootstrapped .venv
 └── run_all.py          single entry point: runs all 4 test files
 ```
 
@@ -115,9 +119,23 @@ Benchmark on a 64-core box:
 | CPython + xdist | 4:16 | 3.1x |
 | **PyPy + xdist** | **1:32** | **8.5x** |
 
-The bottleneck after parallel + PyPy is the single slowest test, so
-further wins would need algorithmic improvements in the verifier
-(hash-consing / memoizing whnf / etc.) rather than more parallelism.
+The bottleneck after parallel + PyPy is the single slowest test
+(`decidable_eq_chain`, ~90s).  cProfile under CPython shows the
+verifier's `_normalize` is called ~152M times during that test,
+spending ~338s self-time at ~2μs per call (under cProfile overhead);
+the per-call cost is already minimal, so the real win is reducing
+the *number of calls* via memoization or hash-consing of `SExpr` —
+which requires making the s-expression representation hashable
+(lists → tuples throughout the verifier).  A profile helper is at
+`scripts/profile_test.py`; pass a test function name and it dumps a
+`.pstats` plus top-30 by cumulative / internal time.
+
+Profiling cautionary tale: an early run pointed at `_uncurry`'s
+`list.insert(0, …)` (116M calls, 25.8s self) as a big-looking quick
+win.  Rewriting to O(n) (`append` + reverse once) — algorithmically
+cleaner — turned out to be a wash in real time: avg spine length is
+~2, so O(n²)→O(n) for n=2 is a negligible save.  cProfile call counts
+can mislead.
 
 ## Source-side feature matrix
 
@@ -715,6 +733,18 @@ Pieces ordered by impact and tractability:
    separators, more notation forms).  Real Lean files require
    elaborator features that aren't trivially in scope, but a useful
    subset is reachable.
+
+7. **Verifier performance — hash-cons `SExpr`.**  Profile shows
+   `_normalize` dominates (152M calls / ~2μs each on
+   `decidable_eq_chain`); per-call cost is already low so the lever
+   is reducing call count via memoization.  Memoizing `_normalize`
+   needs a hashable s-expression — currently `SExpr = Union[str,
+   List[SExpr]]`, lists aren't hashable.  Switching to tuples
+   throughout `mm0_verify.py` would make `_normalize(e, env)` cacheable
+   by `(id(e), env_version)`, but it's invasive — every place that
+   constructs an `SExpr` would need to construct a tuple, and `_subst`
+   / template instantiation build them imperatively.  Substantial
+   refactor of the trusted base; don't undertake casually.
 
 ## Things to know when extending
 
