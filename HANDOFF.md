@@ -757,6 +757,13 @@ Pieces ordered by impact and tractability:
   recent matching entry — correct even when a name shadows itself in
   later branches.
 
+- **Nested `match` needs parens.**  The match parser greedily consumes
+  `|...` arms; a nested match inside an arm's RHS will swallow the
+  surrounding match's later arms.  Workaround: wrap the inner match in
+  `(...)` — once it's a parenthesised atom, arm-greedy parsing stops at
+  the closing `)`.  See `examples/option_ops.lean`'s `Option.decEq` for
+  the canonical example.
+
 - **`match` on an inner-`fun`-bound variable.**  When a `match` is
   scrutinising a BVar from a `fun` binder inside the def's body (e.g.
   `fun (ys : List α) => match ys with ...`), the parser pulls the
