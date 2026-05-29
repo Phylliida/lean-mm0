@@ -93,6 +93,18 @@ $ cd lean-mm0
 $ python run_all.py
 ```
 
+For pytest in parallel (3x speedup on a multi-core box):
+
+```bash
+$ pip install pytest-xdist
+$ python -m pytest tests/ -n auto
+```
+
+The bottleneck after parallelization is the single slowest test
+(currently `decidable_eq_chain` at ~4 min), so further wins would
+need algorithmic improvements in the verifier (hash-consing /
+memoizing whnf / etc.) rather than more parallelism.
+
 ## Source-side feature matrix
 
 What the parser accepts and the elaborator handles:

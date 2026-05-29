@@ -1,6 +1,6 @@
 """Parse a textual Lean-ish source file, build the env, emit, verify."""
 from __future__ import annotations
-import sys, os, io
+import sys, os, io, copy
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.env import Env
@@ -14,6 +14,19 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 EXAMPLES = os.path.normpath(os.path.join(HERE, "..", "examples"))
 
 
+# Cache the parsed-and-verified prelude across tests.  Every test
+# used to call `verify_file(prelude/cic.mm0)` from scratch — a few
+# hundred ms each, multiplied across ~60 tests was significant suite
+# time.  We parse once at module load, then deepcopy for each test so
+# the per-test `verify_text` calls that mutate the venv don't leak
+# between tests.
+_PRELUDE_VENV = verify_file(os.path.join(HERE, "..", "prelude", "cic.mm0"))
+
+
+def _fresh_prelude_venv():
+    return copy.deepcopy(_PRELUDE_VENV)
+
+
 def _run_example(*filenames: str):
     env = Env()
     build_stdlib(env)
@@ -25,7 +38,7 @@ def _run_example(*filenames: str):
         added_all.extend(added)
     out = io.StringIO()
     emit_env(env, out, only=added_all)
-    venv = verify_file(os.path.join(HERE, "..", "prelude", "cic.mm0"))
+    venv = _fresh_prelude_venv()
     pre = io.StringIO()
     emit_env(env, pre, only=[n for n in env.order if n not in added_all])
     verify_text(pre.getvalue(), venv)
