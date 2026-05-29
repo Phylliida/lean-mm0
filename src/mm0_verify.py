@@ -300,10 +300,15 @@ def _normalize(e: SExpr, env: VerifierEnv, fuel: int = 200_000) -> SExpr:
 
 def _uncurry(e: SExpr) -> Tuple[SExpr, List[SExpr]]:
     """Decompose an (eapp ... ) chain into (head, [arg0, arg1, ...])."""
+    # Build in reverse (O(n) appends) and reverse once at the end
+    # rather than `args.insert(0, …)` which is O(n²).  In practice
+    # spine length is small so this is a cleanup, not a measurable
+    # speedup — but the algorithmic version is plainly more correct.
     args: List[SExpr] = []
     while isinstance(e, list) and len(e) == 3 and e[0] == "eapp":
-        args.insert(0, e[2])
+        args.append(e[2])
         e = e[1]
+    args.reverse()
     return e, args
 
 
