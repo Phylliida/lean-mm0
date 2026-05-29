@@ -109,14 +109,33 @@ def lex(src: str) -> List[Tok]:
             out.append(Tok("punc", ".{", i)); i += 2; continue
         if c in "():,;{}|[]@":
             out.append(Tok("punc", c, i)); i += 1; continue
+        # `&&` and `||` use chars not in the greedy-sym set, so keep
+        # them as a special-case lookup.
         matched = False
-        for op in ("<=", ">=", "==", "!=", "&&", "||"):
+        for op in ("&&", "||"):
             if src.startswith(op, i):
                 out.append(Tok("sym", op, i)); i += len(op); matched = True; break
         if matched:
             continue
+        # Greedy sym: consume any run of `+-*<>=!` chars as a single
+        # sym token.  Breaks at `->` / `=>` / `--` so those keep their
+        # punc / comment semantics.  Lets users register operators
+        # like `++`, `>>=`, `<>` via `infix` without lexer changes.
         if c in "+-*<>=!":
-            out.append(Tok("sym", c, i)); i += 1; continue
+            j = i
+            while j < n and src[j] in "+-*<>=!":
+                if (src.startswith("->", j) or
+                    src.startswith("=>", j) or
+                    src.startswith("--", j)):
+                    if j == i:
+                        # The outer punc/comment check should have
+                        # caught this; if we reach here, the char
+                        # actually starts our sym (e.g. `-->` after
+                        # whitespace), so consume one and bail.
+                        j += 1
+                    break
+                j += 1
+            out.append(Tok("sym", src[i:j], i)); i = j; continue
         if c.isdigit():
             j = i
             while j < n and src[j].isdigit():

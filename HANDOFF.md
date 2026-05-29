@@ -109,7 +109,7 @@ What the parser accepts and the elaborator handles:
 | `inductive Name params : Type where \| ctor (args) : T \| ...` | full datatype declarations with auto-generated recursors | recursion.lean (indirectly) |
 | `structure / class Name params : Type where (f : T) ...` | desugars to single-ctor inductive + projections | typeclass.lean |
 | `class Name extends P1, P2 where ...` | each parent becomes a `toParent` field | inherit.lean |
-| `infix / infixl / infixr [:prec] OP NAME` | binary infix operators with precedence | arith.lean |
+| `infix / infixl / infixr [:prec] OP NAME` | binary infix operators with precedence; OP can be any contiguous run of `+-*<>=!` characters (lexer is greedy) so `++`, `>>=`, `<>` etc. all work as one token | arith.lean, infix_multi.lean |
 
 ### Term forms
 
@@ -664,10 +664,11 @@ Pieces ordered by impact and tractability:
    filling), unfolding of selected defs.  Substantial, but each piece
    is bounded.
 
-4. **Notation/macro system** — Generalise `infix` to arbitrary mixfix
-   notation like `notation:50 "[" a "," b "]" => Prod.mk a b`.
-   Needs a more flexible token-pattern parser.  Would dramatically
-   improve example readability.
+4. **Notation/macro system** — Multi-char operators (`++`, `>>=`,
+   `<>`, …) now work via greedy sym lexing + the existing `infix`
+   declaration.  Open: arbitrary mixfix `notation:50 "[" a "," b "]"
+   => Prod.mk a b` with bracket-style anchor tokens.  Needs a more
+   flexible token-pattern parser.
 
 5. **Mutual inductives' cross-recursor** — Compile mutual `inductive`
    blocks to a single tag-discriminated inductive, generate a
