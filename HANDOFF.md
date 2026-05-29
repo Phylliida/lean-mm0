@@ -11,10 +11,10 @@ outside the trust boundary.
 
 | | |
 |---|---|
-| Tests | **121 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 54 parser examples) |
-| Total source | ~7.5 kLoC Python + 188 LoC MM0 prelude + 3118 LoC `.lean` examples (54 files) |
+| Tests | **122 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 55 parser examples) |
+| Total source | ~7.5 kLoC Python + 188 LoC MM0 prelude + 3166 LoC `.lean` examples (55 files) |
 | Trusted base | `src/mm0_verify.py` (710 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 73 commits on `master`; clean working tree |
+| Repo | 75 commits on `master`; clean working tree |
 
 ## What the pipeline does
 
@@ -77,12 +77,12 @@ lean-mm0/
 │   │                   instance synth (backtracking), tactics
 │   ├── emitter.py      kernel derivation → MM0 proof text
 │   └── mm0_verify.py   ← TRUSTED: MM0 s-expression verifier (710 LoC)
-├── examples/           54 .lean files (3118 LoC) that compile + verify
+├── examples/           55 .lean files (3166 LoC) that compile + verify
 ├── tests/
 │   ├── test_kernel_smoke.py   (7 tests)
 │   ├── test_emit_basic.py     (3 tests)
 │   ├── suite.py               (57 tests across 14 categories)
-│   └── test_parser.py         (54 .lean examples, each round-tripped)
+│   └── test_parser.py         (55 .lean examples, each round-tripped)
 └── run_all.py          single entry point: runs all 4 test files
 ```
 
@@ -189,7 +189,7 @@ accept something false — only reject something true.
 
 ## What's been built (chronological)
 
-73 commits — feature commits + HANDOFF updates interleaved:
+75 commits — feature commits + HANDOFF updates interleaved:
 
 ```
 383b984  Initial commit: lean-mm0 prototype
@@ -267,6 +267,8 @@ e63900b  HANDOFF: refresh counts and chronological list after have
 1f4fa62  List.mem + List.decMem: membership predicate and decidability
 38df840  HANDOFF: refresh after list_mem
 ccd8570  DecidableEq class + Nat instance + class-driven List.decMem_cls
+8e3dce3  HANDOFF: refresh after DecidableEq commit
+bcda0b8  Multi-char infix operators via greedy sym lexing
 ```
 
 ### `383b984` — initial commit
