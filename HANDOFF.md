@@ -11,10 +11,10 @@ outside the trust boundary.
 
 | | |
 |---|---|
-| Tests | **122 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 55 parser examples) |
-| Total source | ~7.5 kLoC Python + 188 LoC MM0 prelude + 3166 LoC `.lean` examples (55 files) |
+| Tests | **123 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 56 parser examples) |
+| Total source | ~7.6 kLoC Python + 188 LoC MM0 prelude + 3210 LoC `.lean` examples (56 files) |
 | Trusted base | `src/mm0_verify.py` (710 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 75 commits on `master`; clean working tree |
+| Repo | 77 commits on `master`; clean working tree |
 
 ## What the pipeline does
 
@@ -77,12 +77,12 @@ lean-mm0/
 │   │                   instance synth (backtracking), tactics
 │   ├── emitter.py      kernel derivation → MM0 proof text
 │   └── mm0_verify.py   ← TRUSTED: MM0 s-expression verifier (710 LoC)
-├── examples/           55 .lean files (3166 LoC) that compile + verify
+├── examples/           56 .lean files (3210 LoC) that compile + verify
 ├── tests/
 │   ├── test_kernel_smoke.py   (7 tests)
 │   ├── test_emit_basic.py     (3 tests)
 │   ├── suite.py               (57 tests across 14 categories)
-│   └── test_parser.py         (55 .lean examples, each round-tripped)
+│   └── test_parser.py         (56 .lean examples, each round-tripped)
 └── run_all.py          single entry point: runs all 4 test files
 ```
 
@@ -190,7 +190,7 @@ accept something false — only reject something true.
 
 ## What's been built (chronological)
 
-75 commits — feature commits + HANDOFF updates interleaved:
+77 commits — feature commits + HANDOFF updates interleaved:
 
 ```
 383b984  Initial commit: lean-mm0 prototype
@@ -270,6 +270,8 @@ e63900b  HANDOFF: refresh counts and chronological list after have
 ccd8570  DecidableEq class + Nat instance + class-driven List.decMem_cls
 8e3dce3  HANDOFF: refresh after DecidableEq commit
 bcda0b8  Multi-char infix operators via greedy sym lexing
+47d09ed  HANDOFF: refresh after multi-char infix commit
+6b9f0b3  notation: bracket-anchored mixfix with placeholder substitution
 ```
 
 ### `383b984` — initial commit
