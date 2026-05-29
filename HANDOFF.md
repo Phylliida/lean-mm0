@@ -11,10 +11,10 @@ outside the trust boundary.
 
 | | |
 |---|---|
-| Tests | **123 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 56 parser examples) |
-| Total source | ~7.6 kLoC Python + 188 LoC MM0 prelude + 3210 LoC `.lean` examples (56 files) |
+| Tests | **126 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 59 parser examples) |
+| Total source | ~7.6 kLoC Python + 188 LoC MM0 prelude + 3339 LoC `.lean` examples (58 files) |
 | Trusted base | `src/mm0_verify.py` (710 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 77 commits on `master`; clean working tree |
+| Repo | 81 commits on `master`; clean working tree |
 
 ## What the pipeline does
 
@@ -77,12 +77,12 @@ lean-mm0/
 │   │                   instance synth (backtracking), tactics
 │   ├── emitter.py      kernel derivation → MM0 proof text
 │   └── mm0_verify.py   ← TRUSTED: MM0 s-expression verifier (710 LoC)
-├── examples/           56 .lean files (3210 LoC) that compile + verify
+├── examples/           58 .lean files (3339 LoC) that compile + verify
 ├── tests/
 │   ├── test_kernel_smoke.py   (7 tests)
 │   ├── test_emit_basic.py     (3 tests)
 │   ├── suite.py               (57 tests across 14 categories)
-│   └── test_parser.py         (56 .lean examples, each round-tripped)
+│   └── test_parser.py         (59 .lean examples, each round-tripped)
 └── run_all.py          single entry point: runs all 4 test files
 ```
 
@@ -190,7 +190,7 @@ accept something false — only reject something true.
 
 ## What's been built (chronological)
 
-77 commits — feature commits + HANDOFF updates interleaved:
+81 commits — feature commits + HANDOFF updates interleaved:
 
 ```
 383b984  Initial commit: lean-mm0 prototype
@@ -272,6 +272,10 @@ ccd8570  DecidableEq class + Nat instance + class-driven List.decMem_cls
 bcda0b8  Multi-char infix operators via greedy sym lexing
 47d09ed  HANDOFF: refresh after multi-char infix commit
 6b9f0b3  notation: bracket-anchored mixfix with placeholder substitution
+9d73d56  HANDOFF: refresh after notation commit
+8112b21  rw [h1, h2, …]: chained multi-rewrite
+05a2b00  DecidableEq chain: Bool + parametric List instance
+be30adb  have h := e: type-inferred form
 ```
 
 ### `383b984` — initial commit
