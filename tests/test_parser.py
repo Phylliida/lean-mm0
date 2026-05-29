@@ -257,6 +257,10 @@ def test_parse_and_verify_decidable_eq_chain():
                  "decidable_eq_chain.lean")
 
 
+def test_parse_and_verify_option_ops():
+    _run_example("option_ops.lean")
+
+
 def test_parse_and_verify_revert():
     # revert example uses zero_add, succ_add, lift_succ from
     # math.lean / nat_lemmas.lean.
