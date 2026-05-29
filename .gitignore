@@ -4,3 +4,5 @@ __pycache__/
 .python-version
 .pytest_cache/
 .venv/
+*.pstats
+_gen_*.mm1
