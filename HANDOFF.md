@@ -93,17 +93,31 @@ $ cd lean-mm0
 $ python run_all.py
 ```
 
-For pytest in parallel (3x speedup on a multi-core box):
+For fastest iteration, use the Nix dev shell (PyPy + xdist):
+
+```bash
+$ nix-shell
+$ .venv/bin/pytest tests/ -n auto      # ~1.5 min on a multi-core box
+```
+
+Or with CPython + xdist (no Nix shell needed if you have pytest-xdist):
 
 ```bash
 $ pip install pytest-xdist
-$ python -m pytest tests/ -n auto
+$ python -m pytest tests/ -n auto      # ~4 min on a multi-core box
 ```
 
-The bottleneck after parallelization is the single slowest test
-(currently `decidable_eq_chain` at ~4 min), so further wins would
-need algorithmic improvements in the verifier (hash-consing /
-memoizing whnf / etc.) rather than more parallelism.
+Benchmark on a 64-core box:
+
+| Setup | Time | vs sequential |
+|---|---|---|
+| CPython sequential | 13:08 | 1x |
+| CPython + xdist | 4:16 | 3.1x |
+| **PyPy + xdist** | **1:32** | **8.5x** |
+
+The bottleneck after parallel + PyPy is the single slowest test, so
+further wins would need algorithmic improvements in the verifier
+(hash-consing / memoizing whnf / etc.) rather than more parallelism.
 
 ## Source-side feature matrix
 
