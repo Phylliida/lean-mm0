@@ -239,6 +239,10 @@ def test_parse_and_verify_infix_multi():
     _run_example("infix_multi.lean")
 
 
+def test_parse_and_verify_notation_brackets():
+    _run_example("notation_brackets.lean")
+
+
 def test_parse_and_verify_revert():
     # revert example uses zero_add, succ_add, lift_succ from
     # math.lean / nat_lemmas.lean.

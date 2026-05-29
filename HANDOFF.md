@@ -110,6 +110,7 @@ What the parser accepts and the elaborator handles:
 | `structure / class Name params : Type where (f : T) ...` | desugars to single-ctor inductive + projections | typeclass.lean |
 | `class Name extends P1, P2 where ...` | each parent becomes a `toParent` field | inherit.lean |
 | `infix / infixl / infixr [:prec] OP NAME` | binary infix operators with precedence; OP can be any contiguous run of `+-*<>=!` characters (lexer is greedy) so `++`, `>>=`, `<>` etc. all work as one token | arith.lean, infix_multi.lean |
+| `notation:PREC "lit" var "lit" var "lit" => EXPR` | user-defined mixfix with bracket anchors.  Pattern alternates `"literal"` strings and bare placeholder ids, starts with a literal trigger.  Expansion is parsed once with placeholders as a bvar_stack; firing substitutes captured exprs.  Works for `[a, b] => Pair.mk a b`, `!x => Not x`, `<a> => List.cons a List.nil` patterns | notation_brackets.lean |
 
 ### Term forms
 
@@ -667,10 +668,11 @@ Pieces ordered by impact and tractability:
    is bounded.
 
 4. **Notation/macro system** — Multi-char operators (`++`, `>>=`,
-   `<>`, …) now work via greedy sym lexing + the existing `infix`
-   declaration.  Open: arbitrary mixfix `notation:50 "[" a "," b "]"
-   => Prod.mk a b` with bracket-style anchor tokens.  Needs a more
-   flexible token-pattern parser.
+   `<>`) work via greedy sym lexing.  Bracket-anchored mixfix
+   `notation:max "[" a "," b "]" => Pair.mk a b` works
+   (`notation_brackets.lean`).  Open: cross-file notation propagation
+   (currently file-local), richer pattern features (variadic /
+   repeated placeholders), precedence-aware placeholder parsing.
 
 5. **Mutual inductives' cross-recursor** — Compile mutual `inductive`
    blocks to a single tag-discriminated inductive, generate a

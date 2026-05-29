@@ -76,7 +76,7 @@ class Tok:
 
 KEYWORDS = {"def", "axiom", "theorem", "example", "instance",
             "inductive", "structure", "class", "extends",
-            "infix", "infixl", "infixr",
+            "infix", "infixl", "infixr", "notation",
             "fun", "lam", "let", "in",
             "Sort", "Type", "Prop", "forall", "match", "with", "where",
             "by", "exact", "rfl", "intro", "have", "apply", "assumption",
@@ -141,6 +141,18 @@ def lex(src: str) -> List[Tok]:
             while j < n and src[j].isdigit():
                 j += 1
             out.append(Tok("num", src[i:j], i)); i = j; continue
+        if c == '"':
+            # String literal — used only in `notation` declarations to
+            # mark literal anchors (no escape handling needed for the
+            # bracket-style patterns we support).
+            j = i + 1
+            while j < n and src[j] != '"':
+                j += 1
+            if j >= n:
+                raise SyntaxError(f"unterminated string at {i}")
+            out.append(Tok("str", src[i+1:j], i))
+            i = j + 1
+            continue
         if c.isalpha() or c == "_":
             j = i
             while j < n and (src[j].isalnum() or src[j] in "_."):
@@ -151,7 +163,7 @@ def lex(src: str) -> List[Tok]:
             text = src[i:j]
             kind = "kw" if text in {"def", "axiom", "theorem", "example",
                                     "instance", "inductive", "structure", "class",
-                                    "extends", "infix", "infixl", "infixr",
+                                    "extends", "infix", "infixl", "infixr", "notation",
                                     "fun", "lam", "let", "in",
                                     "Sort", "Type", "Prop",
                                     "forall", "match", "with", "where",
@@ -168,13 +180,20 @@ def lex(src: str) -> List[Tok]:
 
 class P:
     def __init__(self, toks: List[Tok], src: str, env=None,
-                 infix_table=None):
+                 infix_table=None, notation_table=None):
         self.toks = toks
         self.i = 0
         self.src = src
         self.env = env
         self.infix_table: Dict[str, Tuple[int, str, str]] = \
             infix_table if infix_table is not None else {}
+        # notation_table: trigger token text → (pattern, expansion, placeholders).
+        # pattern: list of ("lit", text) or ("var", name) items.
+        # expansion: Expr parsed with bvar_stack = placeholders (BVar 0 =
+        # last placeholder).  When the notation fires, captured exprs
+        # for each placeholder are substituted into the expansion.
+        self.notation_table: Dict[str, Tuple[list, Expr, list]] = \
+            notation_table if notation_table is not None else {}
         # If we're parsing a def's body, this is the name of the def
         # (so recursive calls in a `match` body get compiled to the
         # recursor's IH).
@@ -258,6 +277,8 @@ class P:
             return self._parse_structure()
         if nxt and nxt.text in ("infix", "infixl", "infixr"):
             return self._parse_infix()
+        if nxt and nxt.text == "notation":
+            return self._parse_notation()
         kw = self.take()
         if kw.text not in {"def", "axiom", "theorem", "example", "instance"}:
             raise SyntaxError(f"expected def/axiom/theorem/example/instance, got {kw.text!r}")
@@ -438,6 +459,83 @@ class P:
             ctors.append((ctor_name, ctor_fields, ctor_ret))
         return ("inductive", name, lvl_params, params, result_ty, ctors)
 
+    def _dispatch_notation(self, trigger: str,
+                            lvl_params, bvar_stack) -> "Expr":
+        """Consume tokens matching the notation's pattern; substitute
+        captured exprs into the expansion template.  The template was
+        parsed with placeholders as a bvar_stack, so a placeholder
+        named with i-th binding position (counting from the START of
+        the placeholder list) appears as BVar(n - 1 - i) in the
+        expansion.  At fire-time we substitute innermost-first so
+        outer BVars decrement correctly into place."""
+        from .expr import subst_bvar as _sb
+        pattern, expansion, placeholders = self.notation_table[trigger]
+        captured: List[Expr] = []
+        for kind, text in pattern:
+            if kind == "lit":
+                lit_tok = self.take()
+                if lit_tok.text != text:
+                    raise SyntaxError(
+                        f"notation {trigger!r}: expected literal "
+                        f"{text!r}, got {lit_tok.text!r}")
+            else:                                            # "var"
+                arg = self.parse_expr(lvl_params, bvar_stack)
+                captured.append(arg)
+        # captured is in declaration order (first placeholder first).
+        # In the expansion, that placeholder is at BVar(n - 1); the
+        # last placeholder is BVar(0).  Substituting innermost-first
+        # (last captured arg first) handles BVar shifting correctly.
+        result = expansion
+        for arg in reversed(captured):
+            result = _sb(result, 0, arg)
+        return result
+
+    def _parse_notation(self):
+        # `notation[:prec] <pattern> => <expansion>` where <pattern> is
+        # a sequence of `"literal"` strings and bare placeholder ids,
+        # starting with a literal (the trigger token).  The expansion
+        # is parsed with placeholders as a bvar_stack so they appear
+        # as BVars; when the notation fires we substitute the captured
+        # exprs for each BVar.
+        self.take()                                          # "notation"
+        prec = 1024                                          # default: max
+        if self.at(":"):
+            self.take()
+            tok = self.take()
+            if tok.kind != "num":
+                raise SyntaxError(
+                    f"notation expects a number after :, got {tok.text!r}")
+            prec = int(tok.text)
+        pattern: list = []
+        placeholders: list = []
+        while not self.at("=>"):
+            t = self.peek()
+            if t is None:
+                raise SyntaxError("notation: unexpected end of input")
+            if t.kind == "str":
+                pattern.append(("lit", t.text))
+                self.take()
+            elif t.kind == "id":
+                pattern.append(("var", t.text))
+                placeholders.append(t.text)
+                self.take()
+            else:
+                raise SyntaxError(
+                    f"notation pattern expects \"literal\" or id, "
+                    f"got {t.text!r}")
+        if not pattern or pattern[0][0] != "lit":
+            raise SyntaxError(
+                "notation pattern must start with a \"literal\" trigger")
+        self.eat("=>")
+        # Parse expansion with placeholders as bvar_stack — last
+        # placeholder ends up at BVar(0).  These BVars survive in the
+        # stored expansion template; substitution at firing-time
+        # replaces them with captured arg exprs.
+        expansion = self.parse_expr((), placeholders)
+        trigger = pattern[0][1]
+        return ("notation", trigger, (), [], None,
+                [pattern, expansion, placeholders, prec])
+
     def _parse_infix(self):
         # `infix[:prec] OP FUNC` (non-assoc, default prec 65)
         # `infixl[:prec] OP FUNC` (left-associative)
@@ -612,6 +710,12 @@ class P:
         t = self.peek()
         if t is None:
             raise SyntaxError("unexpected EOF")
+        # User-defined notation dispatch.  If the next token matches a
+        # registered trigger, follow its pattern: consume each literal
+        # and parse_expr for each placeholder, then substitute the
+        # captured args into the stored expansion template.
+        if t.text in self.notation_table:
+            return self._dispatch_notation(t.text, lvl_params, bvar_stack)
         if t.text in ("(", "{", "["):
             opener = t.text
             closer = {"(": ")", "{": "}", "[": "]"}[opener]
@@ -1392,6 +1496,13 @@ def elaborate(src: str, env: Env) -> List[str]:
             op_text = decl[1]
             func_name, prec, assoc = decl[5]
             p.infix_table[op_text] = (prec, assoc, func_name)
+            continue                                  # don't add to env
+        elif kind == "notation":
+            # decl is ("notation", trigger, (), [], None,
+            #           [pattern, expansion, placeholders, prec])
+            trigger = decl[1]
+            pattern, expansion, placeholders, prec = decl[5]
+            p.notation_table[trigger] = (pattern, expansion, placeholders)
             continue                                  # don't add to env
         else:
             _, name, lvl_params, binders, ty, body, attributes = decl
