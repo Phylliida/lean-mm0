@@ -1,5 +1,5 @@
-"""General (non-indexed, non-parametric) inductive types for the de-Bruijn
-stock-MM0 prelude.
+"""General (non-indexed, parameter-supporting) inductive types for the
+de-Bruijn stock-MM0 prelude.
 
 Given an inductive spec (type former, constructors with their fields, recursor),
 `generate(ind)` emits the stock-MM0 axiom block -- term decls, shf/sub closure,
