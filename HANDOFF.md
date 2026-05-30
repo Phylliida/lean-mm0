@@ -14,8 +14,9 @@ outside the trust boundary.
 | Tests | **126 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 59 parser examples) |
 | Total source | ~7.6 kLoC Python + 188 LoC MM0 prelude + 3542 LoC `.lean` examples (59 files) |
 | Trusted base | `src/mm0_verify.py` (710 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 91 commits on `master`; clean working tree |
+| Repo | 105 commits on `master`; clean working tree |
 | Dev shell | `shell.nix` provides PyPy + CPython + bootstrapped `.venv` with pytest + xdist; tests in ~1.5 min on a multi-core box |
+| Stock-MM0 experiment | `experiments/stock_mm0_cert/` — certifying-emitter proof-of-concept: drop our βιζ evaluator, certify reductions against **stock MM0** instead (see section at end) |
 
 ## What the pipeline does
 
@@ -841,7 +842,7 @@ the trust boundary holds, and the examples genuinely verify end-to-end.
 
 ## Stock-MM0 trusted-base experiment (later work, in `experiments/stock_mm0_cert/`)
 
-This is a self-contained research arc (9 commits, `14addaf`..`56266f6`) that
+This is a self-contained research arc (13 commits, `14addaf`..`56266f6`) that
 re-examines the project's core premise.  **It does not change the main
 pipeline or trusted base** — it lives entirely under
 `experiments/stock_mm0_cert/` and has its own `README.md` (the authoritative,
@@ -883,7 +884,7 @@ single `de-refl`.  Two tracks:
    won't α-rename), which motivated:
 
 2. **`db.mm1` (de-Bruijn) track — the real path.**  A pure-axiom de-Bruijn
-   CIC prelude in stock MM0 (48 axioms), mirroring `prelude/cic.mm0` but with
+   CIC prelude in stock MM0 (46 axioms), mirroring `prelude/cic.mm0` but with
    `shift` / `subst1` as **provable relations** (out of the trusted base) and
    no binder names (so no α).  Driven by `db_cert.py` (a full certifying
    evaluator + typing certifier) and `induct.py` (an inductive-type
