@@ -838,3 +838,116 @@ not optimised; some constructions are intentionally simple where a
 production system would be sophisticated (no caching, no incremental
 elaboration, no proper diagnostic reporting).  But the kernel is real,
 the trust boundary holds, and the examples genuinely verify end-to-end.
+
+## Stock-MM0 trusted-base experiment (later work, in `experiments/stock_mm0_cert/`)
+
+This is a self-contained research arc (9 commits, `14addaf`..`56266f6`) that
+re-examines the project's core premise.  **It does not change the main
+pipeline or trusted base** — it lives entirely under
+`experiments/stock_mm0_cert/` and has its own `README.md` (the authoritative,
+run-verified writeup; numbers below are copied from it).
+
+### The question
+
+Our trusted base (`src/mm0_verify.py`) is really *stock MM0 + a hand-written
+βδιζ / shift / subst evaluator baked into the trusted core* (`_normalize`).
+That is a weaker claim than "stock MM0", whose verifier does **zero
+computation** — only first-order substitution, matching, and one
+proof-driven `def` unfold.  Can we drop our evaluator and **certify every
+reduction** against stock MM0 instead, so the trusted base becomes a tiny,
+shared, reusable checker?
+
+A reference clone of Mario Carneiro's MM0 is at
+`scientific-computing/mm0` (sibling of this repo).  Two stock checkers were
+built there and are used to check everything below:
+- `mm0-rs/target/release/mm0-rs` — the Rust verifier (`cargo build --release`).
+- `mm0-c/mm0-c-np` — the **minimal 815-line C kernel**, built
+  `gcc main.c -O2 -D NO_PARSER -o mm0-c-np`.  This is the real "tiny trusted
+  base" target.
+
+`mm0/examples/lean.mm1` (also Mario's) is a full CIC-in-stock-MM0
+axiomatisation — the Rosetta Stone that proved the logic fits and showed how
+each reduction becomes an explicit proof.
+
+### What was built (all certified by mm0-rs AND mm0-c)
+
+An **untrusted certifying emitter** that, given a CIC term, generates an
+*explicit* stock-MM0 proof of a reduction our verifier discharges with a
+single `de-refl`.  Two tracks:
+
+1. **`lean.mm1` (named-binder) track** — `cert.py` / `cert_beta.py` /
+   `cert_iota.py`: substitution, β, and ι certificates with abstract algebra.
+   A fresh-name supply makes the α / disjoint-variable bookkeeping (which made
+   hand-authoring impractical) automatic.  Hits an unwinnable α-wall on
+   *concrete* numerals (mm0 ties a Π type-binder to its λ term-binder and
+   won't α-rename), which motivated:
+
+2. **`db.mm1` (de-Bruijn) track — the real path.**  A pure-axiom de-Bruijn
+   CIC prelude in stock MM0 (48 axioms), mirroring `prelude/cic.mm0` but with
+   `shift` / `subst1` as **provable relations** (out of the trusted base) and
+   no binder names (so no α).  Driven by `db_cert.py` (a full certifying
+   evaluator + typing certifier) and `induct.py` (an inductive-type
+   generator).  Milestones:
+   - `1+1=2` and ground recursor computations, with shift/subst proven.
+   - The **core CIC typing judgment** `ht G e T` (`ht_sort`/`var`/`pi`/`lam`/
+     `app`/`conv` + Nat), and a typed theorem routed through `ht_conv` that
+     holds *only* via a reduction certificate.
+   - **Gated ι**: `trec` gets a real type and ι requires the recursor be
+     well-applied, so ι is a sound, type-preserving equality (not an untyped
+     rewrite) — `db.mm1` is a sound-core trusted base.
+   - A **general inductive generator** (`induct.py`): from a spec it emits the
+     whole stock-MM0 axiom block (terms, shf/sub closure, typing, gated ι) and
+     registers it with the certifier.  Validated by regenerating Nat's recursor
+     type *verbatim* against the hand-written `db.mm1`.  Covers the full
+     inductive spectrum:
+
+     | inductive | computation | cert nodes |
+     |---|---|---|
+     | `Bool` | `not true = false` / `not false = true` | 90 / 90 |
+     | `ListNat` | `length [0] = 1` / `length [0,0,0] = 3` | 383 / 859 |
+     | `List A` (parametric) | `length (List Nat) [0,0] = 2` | 1165 |
+     | `List A` (same rec, other param) | `length (List Bool) [tt] = 1` | 725 |
+     | `Eq` (indexed; J eliminator) | `eqrec Nat 0 C 1 0 (refl Nat 0) = 1` | 341 |
+     | `Vec` (recursive **and** indexed) | `vlength Nat [7,7] = 2` | 2581 |
+
+   (For contrast, our `_normalize` does each of these with **1** `de-refl`.)
+
+### Speed: stock kernel (check) vs our verifier (compute)
+
+`bench.py` runs Church multiplication `mul Cₙ Cₙ ⟹ Cₙ²` (pure β) both ways:
+our `_normalize` (computes) vs generate-then-check with `mm0-c` (no compute).
+
+| n | result | our verifier | mm0-c check | gen (untrusted) | cert |
+|---|---|---|---|---|---|
+| 8  | C₆₄   | 2.5 ms | **1.2 ms** | 2.5 ms | 18 KB |
+| 16 | C₂₅₆  | 18 ms  | **1.8 ms** | 16 ms  | 34 KB |
+| 24 | C₅₇₆  | 72 ms  | **1.9 ms** | 61 ms  | 58 KB |
+| 28 | C₇₈₄  | 87 ms  | **1.5 ms** | 97 ms  | 76 KB |
+| 32 | C₁₀₂₄ | 133 ms | **1.9 ms** | 142 ms | 95 KB |
+
+`mm0-c` checking is ~flat (startup-dominated; the proof-check is sub-ms) while
+our verifier climbs — so the stock kernel is **2× → 70× faster to check** and
+pulling away, *while verifying every β-step*.  Certificates are modest (tens
+of KB); generation (untrusted) is comparable to computing.  The win is
+**architectural**: the correctness-critical surface shrinks to a tiny, fast,
+shared, soon-formally-verified kernel; the computation moves to untrusted
+generation.
+
+### Status / honest scope
+
+The arc answers the question **yes, for CIC's core**: βιζ, typing, conversion,
+and every inductive family (parametric, indexed, recursive+indexed) certify
+out of the trusted base and check under the 815-line C kernel.  Still open
+(documented in the experiment README's roadmap, none started):
+- level equations (`lmax`/`limax` laws) and mutual inductives,
+- δ (statement-level `def` unfold),
+- **kernel integration** — drive the emitter from our real `src/expr.py` CIC
+  AST (it maps onto these de-Bruijn terms), replacing `src/emitter.py`'s
+  `de-refl` shortcut with generated certificates.  Only at that point would
+  the βιζ + shift/subst1 evaluator actually leave the *production* trusted
+  base; today this is a parallel proof-of-concept, not wired into the pipeline.
+
+Reproduce: from `experiments/stock_mm0_cert/`, run `python3 run_db.py`,
+`run_db_typed.py`, `run_induct.py`, `bench.py` (each prints results +
+both checkers' verdicts).  Build the checkers first (see the experiment
+README).
