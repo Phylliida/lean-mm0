@@ -1,16 +1,13 @@
 -- ============================================================
 -- De-Bruijn CIC-fragment prelude in STOCK MM0.
 --
--- Mirrors our own prelude/cic.mm0 (de Bruijn indices, untyped
--- definitional equality = the reduction relation), but with `shift`
--- and `subst1` as *provable relations* (per-constructor axioms)
--- instead of trusted builtins.  Because everything is de Bruijn, there
--- are NO MM0 bound variables -> no disjoint-variable conditions, no
--- alpha-renaming wall (the thing that blocked concrete computations in
--- the named lean.mm1 prelude).
+-- Mirrors prelude/cic.mm0 (de Bruijn indices, def-eq = reduction), but with
+-- `shift`/`subst1` as *provable relations* (out of the trusted base).  No MM0
+-- bound variables => no disjoint-variable conditions, no alpha wall.
 --
--- This file is PURE AXIOMS (no proofs): it is the trusted spec.  The
--- emitter (db_cert.py) generates the proofs that reductions hold.
+-- This file is PURE AXIOMS (the trusted spec).  db_cert.py generates proofs.
+-- iota is GATED on the recursor being well-typed (see deq_iota_* at the end),
+-- so it is a sound definitional equality, not an untyped rewrite.
 -- ============================================================
 
 delimiter $ ( $ $ ) $;
@@ -20,32 +17,35 @@ term nO: nat;
 term nS: nat > nat;
 
 sort lvl;
-term lz: lvl;                         -- universe level 0
-term lS: lvl > lvl;                   -- successor level
+term lz: lvl;
+term lS: lvl > lvl;
+term lmax:  lvl > lvl > lvl;
+term limax: lvl > lvl > lvl;
 
 sort expr;
 term evar: nat > expr;
-term esort: lvl > expr;               -- Sort l   (the universes)
+term esort: lvl > expr;
 term eapp: expr > expr > expr;
 infixl eapp: $@$ prec 100;
-term elam: expr > expr > expr;        -- elam DOMAIN BODY  (binder is positional)
+term elam: expr > expr > expr;        -- elam DOMAIN BODY  (binder positional)
 term epi:  expr > expr > expr;        -- epi  DOMAIN BODY  (dependent function type)
-term tnat: expr;                      -- the type Nat
-term tzero: expr;                     -- 0
-term tsucc: expr;                     -- succ  (succ n = eapp tsucc n)
-term trec: expr;                      -- Nat recursor (motive/level erased: untyped demo)
+term tnat: expr;
+term tzero: expr;
+term tsucc: expr;                     -- succ n = eapp tsucc n
+term trec: expr;                      -- Nat recursor
 
 sort ctx;
 term cnil: ctx;
+term ccons: expr > ctx > ctx;         -- context extension  G, T
 
 provable sort wff;
 
--- ---- nat arithmetic (for shift/subst index bookkeeping) ----
-term padd: nat > nat > nat > wff;                       -- padd i d k  :  i + d = k
+-- ---- nat arithmetic ----
+term padd: nat > nat > nat > wff;                       -- i + d = k
 axiom padd0 (i: nat): $ padd i nO i $;
 axiom paddS (i d k: nat): $ padd i d k $ > $ padd i (nS d) (nS k) $;
 
-term nlt: nat > nat > wff;                              -- nlt a b  :  a < b
+term nlt: nat > nat > wff;                              -- a < b
 axiom nlt0 (n: nat): $ nlt nO (nS n) $;
 axiom nltS (m n: nat): $ nlt m n $ > $ nlt (nS m) (nS n) $;
 
@@ -55,13 +55,13 @@ axiom shf_nat  (d c: nat): $ shf tnat  d c tnat  $;
 axiom shf_zero (d c: nat): $ shf tzero d c tzero $;
 axiom shf_succ (d c: nat): $ shf tsucc d c tsucc $;
 axiom shf_rec  (d c: nat): $ shf trec  d c trec  $;
+axiom shf_sort (l: lvl) (d c: nat): $ shf (esort l) d c (esort l) $;
 axiom shf_app (f a f2 a2: expr) (d c: nat):
   $ shf f d c f2 $ > $ shf a d c a2 $ > $ shf (f @ a) d c (f2 @ a2) $;
 axiom shf_lam (t b t2 b2: expr) (d c: nat):
   $ shf t d c t2 $ > $ shf b d (nS c) b2 $ > $ shf (elam t b) d c (elam t2 b2) $;
 axiom shf_pi (t b t2 b2: expr) (d c: nat):
   $ shf t d c t2 $ > $ shf b d (nS c) b2 $ > $ shf (epi t b) d c (epi t2 b2) $;
-axiom shf_sort (l: lvl) (d c: nat): $ shf (esort l) d c (esort l) $;
 axiom shf_var_0  (i d k: nat): $ padd i d k $ > $ shf (evar i) d nO (evar k) $;
 axiom shf_var_S0 (d c: nat): $ shf (evar nO) d (nS c) (evar nO) $;
 axiom shf_var_SS (i d c j: nat):
@@ -73,54 +73,42 @@ axiom sub_nat  (v: expr) (j: nat): $ sub tnat  v j tnat  $;
 axiom sub_zero (v: expr) (j: nat): $ sub tzero v j tzero $;
 axiom sub_succ (v: expr) (j: nat): $ sub tsucc v j tsucc $;
 axiom sub_rec  (v: expr) (j: nat): $ sub trec  v j trec  $;
+axiom sub_sort (l: lvl) (v: expr) (j: nat): $ sub (esort l) v j (esort l) $;
 axiom sub_app (f a f2 a2 v: expr) (j: nat):
   $ sub f v j f2 $ > $ sub a v j a2 $ > $ sub (f @ a) v j (f2 @ a2) $;
 axiom sub_lam (t b t2 b2 v: expr) (j: nat):
   $ sub t v j t2 $ > $ sub b v (nS j) b2 $ > $ sub (elam t b) v j (elam t2 b2) $;
 axiom sub_pi (t b t2 b2 v: expr) (j: nat):
   $ sub t v j t2 $ > $ sub b v (nS j) b2 $ > $ sub (epi t b) v j (epi t2 b2) $;
-axiom sub_sort (l: lvl) (v: expr) (j: nat): $ sub (esort l) v j (esort l) $;
 axiom sub_var_eq (v v2: expr) (j: nat): $ shf v j nO v2 $ > $ sub (evar j) v j v2 $;
 axiom sub_var_lt (i j: nat) (v: expr): $ nlt i j $ > $ sub (evar i) v j (evar i) $;
 axiom sub_var_gt (i j: nat) (v: expr): $ nlt j (nS i) $ > $ sub (evar (nS i)) v j (evar i) $;
 
--- ---- definitional equality (the reduction relation), untyped ----
+-- ---- definitional equality (reduction), untyped congruence ----
 term deq: ctx > expr > expr > wff;
 axiom deq_refl  (g: ctx) (e: expr): $ deq g e e $;
 axiom deq_sym   (g: ctx) (a b: expr): $ deq g a b $ > $ deq g b a $;
 axiom deq_trans (g: ctx) (a b c: expr): $ deq g a b $ > $ deq g b c $ > $ deq g a c $;
 axiom deq_app (g: ctx) (f a f2 a2: expr):
   $ deq g f f2 $ > $ deq g a a2 $ > $ deq g (f @ a) (f2 @ a2) $;
+axiom deq_pi (g: ctx) (cA cA2 cB cB2: expr):
+  $ deq g cA cA2 $ > $ deq (ccons cA g) cB cB2 $ > $ deq g (epi cA cB) (epi cA2 cB2) $;
+axiom deq_lam (g: ctx) (cA cA2 cb cb2: expr):
+  $ deq g cA cA2 $ > $ deq (ccons cA g) cb cb2 $ > $ deq g (elam cA cb) (elam cA2 cb2) $;
 -- beta:  (\T. b) a  =  b[a / 0]
 axiom deq_beta (g: ctx) (t b a b2: expr):
   $ sub b a nO b2 $ > $ deq g ((elam t b) @ a) b2 $;
--- iota:  rec C z s 0 = z ;   rec C z s (succ k) = s k (rec C z s k)
-axiom deq_iota_zero (g: ctx) (cC z s: expr):
-  $ deq g (trec @ cC @ z @ s @ tzero) z $;
-axiom deq_iota_succ (g: ctx) (cC z s k: expr):
-  $ deq g (trec @ cC @ z @ s @ (tsucc @ k))
-          (s @ k @ (trec @ cC @ z @ s @ k)) $;
 
 -- ============================================================
 -- Typing judgment  ht G e T   ( G |- e : T ),  core CIC rules.
--- Mirrors prelude/cic.mm0; this is what makes db.mm1 a sound
--- trusted base rather than just a reduction relation.
 -- ============================================================
-term ccons: expr > ctx > ctx;        -- context extension  G, T
-term lmax:  lvl > lvl > lvl;
-term limax: lvl > lvl > lvl;
-
 term ht: ctx > expr > expr > wff;
-
--- Sort l : Sort (l+1)
 axiom ht_sort (g: ctx) (l: lvl): $ ht g (esort l) (esort (lS l)) $;
--- variables (de Bruijn): #0 in (G,T) has type (shift1 T); weakening for #(i+1)
 axiom ht_var0 (g: ctx) (cT cT2: expr):
   $ shf cT (nS nO) nO cT2 $ > $ ht (ccons cT g) (evar nO) cT2 $;
 axiom ht_weak (g: ctx) (cS cT cT2: expr) (i: nat):
   $ ht g (evar i) cT $ > $ shf cT (nS nO) nO cT2 $ >
   $ ht (ccons cS g) (evar (nS i)) cT2 $;
--- Pi / lambda / application / conversion
 axiom ht_pi (g: ctx) (cA cB: expr) (u v: lvl):
   $ ht g cA (esort u) $ > $ ht (ccons cA g) cB (esort v) $ >
   $ ht g (epi cA cB) (esort (limax u v)) $;
@@ -134,7 +122,33 @@ axiom ht_conv (g: ctx) (t cT cT2: expr) (u: lvl):
   $ ht g t cT $ > $ deq g cT cT2 $ > $ ht g cT2 (esort u) $ >
   $ ht g t cT2 $;
 
--- Nat as a typed primitive (Nat : Type, 0 : Nat, succ : Nat -> Nat)
+-- Nat as a typed primitive
 axiom ht_nat  (g: ctx): $ ht g tnat (esort (lS lz)) $;
 axiom ht_zero (g: ctx): $ ht g tzero tnat $;
 axiom ht_succ (g: ctx): $ ht g tsucc (epi tnat tnat) $;
+
+-- The recursor's type:
+--   trec : Pi C : (Nat -> Sort u),
+--            C 0 -> (Pi n:Nat, C n -> C (succ n)) -> (Pi m:Nat, C m)
+-- (de Bruijn; C is index 0 right after its binder, shifting inward.)
+axiom ht_rec (g: ctx) (u: lvl):
+  $ ht g trec
+    (epi (epi tnat (esort u))
+         (epi (eapp (evar nO) tzero)
+              (epi (epi tnat (epi (eapp (evar (nS (nS nO))) (evar nO))
+                                  (eapp (evar (nS (nS (nS nO)))) (eapp tsucc (evar (nS nO))))))
+                   (epi tnat (eapp (evar (nS (nS (nS nO)))) (evar nO)))))) $;
+
+-- ============================================================
+-- iota, GATED on the recursor being applied to well-typed motive + cases.
+-- `ht g (trec @ cC @ z @ s) mt` can only hold via ht_rec + ht_app, which
+-- forces cC,z,s to typecheck at the recursor's signature -- so these are
+-- sound, type-preserving definitional equalities.
+-- ============================================================
+axiom deq_iota_zero (g: ctx) (cC z s mt: expr):
+  $ ht g (trec @ cC @ z @ s) mt $ >
+  $ deq g (trec @ cC @ z @ s @ tzero) z $;
+axiom deq_iota_succ (g: ctx) (cC z s k mt: expr):
+  $ ht g (trec @ cC @ z @ s) mt $ > $ ht g k tnat $ >
+  $ deq g (trec @ cC @ z @ s @ (tsucc @ k))
+          (s @ k @ (trec @ cC @ z @ s @ k)) $;
