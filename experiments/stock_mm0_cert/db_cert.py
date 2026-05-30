@@ -30,6 +30,13 @@ class EPi(T): dom: T; body: T       # epi DOMAIN BODY
 
 TNAT, TZERO, TSUCC, TREC = Const("tnat"), Const("tzero"), Const("tsucc"), Const("trec")
 
+# ---------------- registry of GENERATED inductives (populated by induct.py) ----
+# Nat stays hard-wired (below) and benchmarked; these drive Bool/ListNat/etc.
+TYCON   = {}   # tycon const name -> level string (the Sort it inhabits)
+CTOR_IX = {}   # ctor const name  -> (ind, index)
+REC_OF  = {}   # recursor name    -> ind
+ATOMIC  = set()  # every generated atomic const name (for shf/sub closure)
+
 def natlit(n: int) -> str:
     return "nO" if n == 0 else f"(nS {natlit(n-1)})"
 
@@ -66,7 +73,12 @@ def prove_nlt(a: int, b: int) -> str:     # proof of  nlt a b   (requires a < b)
 # ---------------- shift certificate:  shf e d c e' ----------------
 def prove_shf(e: T, d: int, c: int):
     if isinstance(e, Const):
-        return e, f"(shf_{ {'tnat':'nat','tzero':'zero','tsucc':'succ','trec':'rec'}[e.name] })"
+        nat_names = {'tnat':'nat','tzero':'zero','tsucc':'succ','trec':'rec'}
+        if e.name in nat_names:
+            return e, f"(shf_{nat_names[e.name]})"
+        if e.name in ATOMIC:
+            return e, f"(shf_{e.name})"
+        raise KeyError(f"shf: unknown const {e.name}")
     if isinstance(e, App):
         f2, pf = prove_shf(e.f, d, c); a2, pa = prove_shf(e.a, d, c)
         return App(f2, a2), f"(shf_app {pf} {pa})"
@@ -91,7 +103,12 @@ def prove_shf(e: T, d: int, c: int):
 # ---------------- subst certificate:  sub b v j b' ----------------
 def prove_sub(b: T, v: T, j: int):
     if isinstance(b, Const):
-        return b, f"(sub_{ {'tnat':'nat','tzero':'zero','tsucc':'succ','trec':'rec'}[b.name] })"
+        nat_names = {'tnat':'nat','tzero':'zero','tsucc':'succ','trec':'rec'}
+        if b.name in nat_names:
+            return b, f"(sub_{nat_names[b.name]})"
+        if b.name in ATOMIC:
+            return b, f"(sub_{b.name})"
+        raise KeyError(f"sub: unknown const {b.name}")
     if isinstance(b, App):
         f2, pf = prove_sub(b.f, v, j); a2, pa = prove_sub(b.a, v, j)
         return App(f2, a2), f"(sub_app {pf} {pa})"
@@ -152,6 +169,29 @@ def whnf(e: T):
             contractum = App(App(s, k), curry(TREC, [C, z, s, k]))
             wc, cc = whnf(contractum)
             return wc, _trans(cong_f, _trans(cong_mj, _trans(iota, cc)))
+    # general (generated) inductive recursor
+    if isinstance(head, Const) and head.name in REC_OF:
+        ind = REC_OF[head.name]
+        k = len(ind.ctors)
+        if len(args) == k + 2:
+            C, minors, major = args[0], args[1:1+k], args[1+k]
+            mj, cmj = whnf(major)
+            cong_mj = f"(deq_app (deq_refl) {cmj})" if cmj else None
+            mh, fargs = uncurry(mj)
+            if isinstance(mh, Const) and mh.name in CTOR_IX \
+               and CTOR_IX[mh.name][0] is ind:
+                cidx = CTOR_IX[mh.name][1]
+                c = ind.ctors[cidx]
+                if len(fargs) == len(c.fields):
+                    gate1 = prove_rec_partial_gen(ind, C, minors)
+                    _t, gate2 = prove_ht(curry(Const(mh.name), fargs), [])
+                    iota = f"(deq_iota_{mh.name} {gate1} {gate2})"
+                    contr = curry(minors[cidx], fargs)
+                    for i, fl in enumerate(c.fields):
+                        if fl.rec:
+                            contr = App(contr, curry(head, list(args[:1+k]) + [fargs[i]]))
+                    wc, cc = whnf(contr)
+                    return wc, _trans(cong_f, _trans(cong_mj, _trans(iota, cc)))
     return g, cong_f
 
 def prove_norm(e: T):
@@ -201,9 +241,18 @@ def prove_ht(e: T, ctx):
     if isinstance(e, ESort):
         return ESort(f"(lS {e.lvl})"), "(ht_sort)"
     if isinstance(e, Const):
-        if e is TNAT:  return ESort("(lS lz)"), "(ht_nat)"
-        if e is TZERO: return TNAT, "(ht_zero)"
-        if e is TSUCC: return EPi(TNAT, TNAT), "(ht_succ)"
+        # compare by NAME, not identity: a `tnat` inside a generated schema is a
+        # fresh Const("tnat"), not the module singleton TNAT.
+        if e.name == "tnat":  return ESort("(lS lz)"), "(ht_nat)"
+        if e.name == "tzero": return TNAT, "(ht_zero)"
+        if e.name == "tsucc": return EPi(TNAT, TNAT), "(ht_succ)"
+        if e.name in TYCON:   return ESort(TYCON[e.name]), f"(ht_{e.name})"
+        if e.name in CTOR_IX:
+            ind, ix = CTOR_IX[e.name]
+            return ind.ctor_types[e.name], f"(ht_{e.name})"
+        if e.name in REC_OF:
+            ind = REC_OF[e.name]
+            return ind.rec_type, f"(ht_{ind.rec_name})"
         raise ValueError(f"no typing rule for {e.name}")
     if isinstance(e, Var):
         return _ht_var(e.i, ctx)
@@ -258,6 +307,21 @@ def prove_rec_partial(cC: T, z: T, s: T) -> str:
     ps = _coerce(ps, ts, rest1sub.dom, [])            # s : Pi n, cC n -> cC (succ n)
     _r3, sub3 = prove_sub(rest1sub.body, s, 0)
     return f"(ht_app {p2} {ps} {sub3})"
+
+def prove_rec_partial_gen(ind, C: T, minors) -> str:
+    """ht g (<rec> @ C @ minors...) (Pi x:T, C x), for a generated inductive.
+    Mirrors the Nat-specific prove_rec_partial: C is applied without coercion
+    (MM0 unifies the level u); minors are coerced to their expected types."""
+    p = f"(ht_{ind.rec_name})"
+    _tC, pC = prove_ht(C, [])
+    cur, subp = prove_sub(ind.rec_tail, C, 0)          # rec type minus the Pi C
+    p = f"(ht_app {p} {pC} {subp})"
+    for m in minors:
+        tm, pm = prove_ht(m, [])
+        pm = _coerce(pm, tm, cur.dom, [])
+        cur, subp = prove_sub(cur.body, m, 0)
+        p = f"(ht_app {p} {pm} {subp})"
+    return p
 
 def prove_ht_nat(e: T) -> str:
     """Proof of  ht G e tnat  for a numeral e (succ^n zero)."""
