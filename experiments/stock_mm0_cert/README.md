@@ -138,26 +138,36 @@ inductive so `db_cert`'s certifier (`prove_ht` / `whnf` /
 `prove_rec_partial_gen`) can typecheck and normalise terms over it.  This is
 what `src/inductive.py` does internally, re-expressed as pure stock-MM0 axioms.
 
-Scope: **non-indexed, non-parametric** inductives in one universe — covers
-nullary/n-ary ctors and recursive + data fields.  (Parametric like polymorphic
-`List`, and indexed like `Eq`, are harder; left as next steps.)
+Scope: **non-indexed** inductives in one universe, now **with parameters**
+(uniform across constructors) — so polymorphic `List` works alongside Bool and
+monomorphic ListNat.  Covers nullary/n-ary ctors and recursive + data fields.
+(Indexed inductives like `Eq`/`Vec` are harder; left as the next step.)
 
 **Correctness check:** regenerating Nat reproduces `db.mm1`'s hand-written
-recursor type *verbatim* (`run_induct.py` asserts the de-Bruijn structures are
-equal) — so the index arithmetic is right.
+recursor type *verbatim*, and regenerating polymorphic List matches an
+independently hand-built de-Bruijn recursor type (`run_induct.py` asserts both
+structural equalities) — so the (parametric) index arithmetic is right.
 
 Generated inductives + certified recursor computations (mm0-rs + mm0-c, all
-exit 0):
+exit 0; node counts read from the actual run):
 
 | inductive | computation | nodes |
 |---|---|---|
-| `Bool` (2 nullary ctors)        | `not true = false` / `not false = true` | 82 / 84 |
-| `ListNat` (nil; cons:Nat→L→L)   | `length [0] = 1`     | 406 |
-| `ListNat`                       | `length [0,0,0] = 3` | 1216 |
+| `Bool` (2 nullary ctors)         | `not true = false` / `not false = true` | 90 / 90 |
+| `ListNat` (nil; cons:Nat→L→L)    | `length [0] = 1`     | 383 |
+| `ListNat`                        | `length [0,0,0] = 3` | 859 |
+| `List A` (parametric)            | `length (List Nat) [0,0] = 2` | 1165 |
+| `List A` — *same recursor, diff param* | `length (List Bool) [tt] = 1` | 725 |
 
 The recursor types the generator builds, in de Bruijn:
 - `Bool.rec : Π C:(Bool→Sort u), C true → C false → Π x, C x`
 - `ListNat.rec : Π C:(L→Sort u), C nil → (Π h:Nat, Π t:L, C t → C (cons h t)) → Π x, C x`
+- `List.rec : Π A:Sort1, Π C:(List A→Sort u), C(nil A) → (Π h:A, Π t:List A, C t → C(cons A h t)) → Π x, C x`
+
+Parameters thread through the type former (`List : Sort1 → Sort1`), every
+constructor (`cons : Π A, A → List A → List A`), and the recursor; recursive
+occurrences reuse the same parameter, and `length (List Nat)` vs
+`length (List Bool)` exercise the *same* generated recursor at two parameters.
 
 ## Run
 
@@ -173,7 +183,7 @@ python3 run_layer2.py      # beta certificates           (lean.mm1 track)
 python3 run_iota.py        # recursor (iota), abstract   (lean.mm1 track)
 python3 run_db.py          # concrete numerals, 1+1=2    (de-Bruijn track)
 python3 run_db_typed.py    # typed theorem via ht_conv   (de-Bruijn track)
-python3 run_induct.py      # general inductives: Bool, ListNat (de-Bruijn track)
+python3 run_induct.py      # general inductives: Bool, ListNat, List A (de-Bruijn)
 ```
 Each prints the generated `.mm1`, a node-count table, and the verdict from
 both checkers.  Generated fragments land in `_gen_layer{1,2}.mm1`.
@@ -238,12 +248,12 @@ Reading it honestly:
 3. ✅ **Recursor typing + gated ι** (`ht_rec`, gated `deq_iota_*`) — ι is now
    a sound, type-preserving equality; the emitter discharges the typing gate
    automatically.  Nat is a typed primitive.
-4. ✅ **General (non-indexed, non-parametric) inductives** (`induct.py`) — a
+4. ✅ **General non-indexed inductives, incl. parameters** (`induct.py`) — a
    generator emits the per-inductive axiom block + registers it; validated by
-   reproducing Nat; Bool + ListNat certified.
-5. **Parametric + indexed inductives + level equations.**  Polymorphic `List`
-   (parameters), `Eq`/`Vec` (indices, à la `lean.mm1`'s `Ind`/`Ctor`/`Rec`),
-   and the `lvl` equations (`lmax`/`limax` laws) our verifier normalises.
+   reproducing Nat *and* polymorphic List; Bool, ListNat, and `List A` certified.
+5. **Indexed inductives + level equations.**  `Eq`/`Vec` (indices, à la
+   `lean.mm1`'s `Ind`/`Ctor`/`Rec`), and the `lvl` equations (`lmax`/`limax`
+   laws) our verifier normalises.
 6. **δ.**  MM0 statement-level `def` unfolding for our `def`s.
 7. **Kernel integration.**  Drive the emitter from our `src/expr.py` CIC AST
    (it already maps onto these de-Bruijn terms), replacing `src/emitter.py`'s
@@ -268,10 +278,10 @@ Reading it honestly:
 - `run_db.py` — concrete ground computations incl. `1+1=2`.
 - `run_db_typed.py` — a typed theorem routing a reduction cert through
   `ht_conv`.
-- `induct.py` — generator for general (non-indexed, non-parametric)
-  inductives: spec → stock-MM0 axiom block + registry entry.
-- `run_induct.py` — validates the generator against Nat; generates +
-  certifies Bool and ListNat recursor computations.
+- `induct.py` — generator for general non-indexed inductives (incl.
+  parameters): spec → stock-MM0 axiom block + registry entry.
+- `run_induct.py` — validates the generator against Nat and polymorphic List;
+  generates + certifies Bool, ListNat, and `List A` recursor computations.
 - `bench.py` — speed benchmark (stock kernel check vs our verifier compute).
 
 Generated output (`_gen_*.mm1`) is gitignored.
