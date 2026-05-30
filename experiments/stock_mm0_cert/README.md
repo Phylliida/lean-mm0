@@ -172,25 +172,30 @@ both: our `src/mm0_verify._normalize` (computes the reduction — what our
 trusted verifier does) vs generate-then-check with stock `mm0-c` (zero
 computation in the kernel).
 
-| n | result | our verifier (PyPy) | **mm0-c check** | gen (untrusted) | cert |
+"our verifier" times are CPython, single-shot (so ±noise):
+
+| n | result | our verifier | **mm0-c check** | gen (untrusted) | cert |
 |---|---|---|---|---|---|
-| 8  | C₆₄  | 9.7 ms  | **1.0 ms**  | 32 ms  | 60 KB |
-| 16 | C₂₅₆ | 30.8 ms | **4.5 ms**  | 625 ms | 601 KB |
-| 24 | C₅₇₆ | 76 ms   | **19.5 ms** | 3.8 s  | 2.9 MB |
-| 28 | C₇₈₄ | 115 ms  | **35.7 ms** | 7.3 s  | 5.3 MB |
+| 8  | C₆₄   | 2.5 ms | **1.2 ms** | 2.5 ms | 18 KB (2.1k nodes) |
+| 16 | C₂₅₆  | 18 ms  | **1.8 ms** | 16 ms  | 34 KB (11k nodes) |
+| 24 | C₅₇₆  | 72 ms  | **1.9 ms** | 61 ms  | 58 KB (31k nodes) |
+| 28 | C₇₈₄  | 87 ms  | **1.5 ms** | 97 ms  | 76 KB (46k nodes) |
+| 32 | C₁₀₂₄ | 133 ms | **1.9 ms** | 142 ms | 95 KB (66k nodes) |
 
 Reading it honestly:
-- **The stock kernel checks several× faster than our verifier computes**
-  (~3× vs our PyPy fast-path at scale, ~25× vs CPython) — and it's an
-  815-line C program doing *no* computation, *while verifying every β-step*
-  (our `_normalize` just computes, trusting itself).
-- **But the certificate is large and must be generated.**  Generation
-  (untrusted Python) is ~8× *slower* than just computing, and certs reach MBs.
-  The expensive work moved OUT of the trusted base — it didn't vanish.
-- **So the win is architectural, not raw end-to-end speed:** the
-  correctness-critical surface shrinks to a tiny, fast, shared, soon-formally-
-  verified kernel; you pay in proof size + (untrusted) generation time.  Ideal
-  for "check a fixed corpus cheaply and trustably"; less so for tight dev loops.
+- **The stock kernel checks in ~1–2 ms and stays nearly flat** (it's
+  process-startup-dominated — the actual proof-check is sub-millisecond),
+  while our verifier's compute climbs ≈quadratically to 130 ms+ and keeps
+  going.  So mm0-c is **2× (n=8) → 70× (n=32) faster to check, and pulling
+  away** — an 815-line C program verifying every β-step vs our Python
+  computing.  (PyPy narrows our side to ~3× at scale, with JIT-warmup noise.)
+- **Certificates are modest here** (tens of KB) and **generation (untrusted
+  Python) is comparable to just computing** — the expensive work moved out of
+  the trusted base without exploding.
+- **The win is architectural:** the correctness-critical surface shrinks to a
+  tiny, fast, shared, soon-formally-verified kernel; computation lives in
+  untrusted generation.  Ideal for "check a fixed corpus cheaply and
+  trustably."
 
 ## Roadmap
 
