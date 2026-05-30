@@ -169,7 +169,7 @@ exit 0; node counts read from the actual run):
 | `List A` (parametric)            | `length (List Nat) [0,0] = 2` | 1165 |
 | `List A` — *same recursor, diff param* | `length (List Bool) [tt] = 1` | 725 |
 | `Eq` (**indexed**; J eliminator) | `eqrec Nat 0 C 1 0 (refl Nat 0) = 1` | 341 |
-| `Vec` (**recursive + indexed**)  | `vlength Nat [7,7] = 2` | 1453 |
+| `Vec` (**recursive + indexed**)  | `vlength Nat [7,7] = 2` | 2581 |
 
 The recursor types the generator builds, in de Bruijn:
 - `Bool.rec : Π C:(Bool→Sort u), C true → C false → Π x, C x`
@@ -301,7 +301,8 @@ Reading it honestly:
 - `induct.py` — generator for general inductives (parameters + indices):
   spec → stock-MM0 axiom block + registry entry.
 - `run_induct.py` — validates the generator against Nat, polymorphic List, and
-  Eq; generates + certifies Bool, ListNat, `List A`, and `Eq` (J) computations.
+  Eq; generates + certifies Bool, ListNat, `List A`, `Eq` (J), and `Vec`
+  (recursive+indexed) computations.
 - `bench.py` — speed benchmark (stock kernel check vs our verifier compute).
 
 Generated output (`_gen_*.mm1`) is gitignored.
