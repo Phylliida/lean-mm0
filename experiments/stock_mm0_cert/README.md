@@ -163,7 +163,7 @@ exit 0; node counts read from the actual run):
 | `ListNat`                        | `length [0,0,0] = 3` | 859 |
 | `List A` (parametric)            | `length (List Nat) [0,0] = 2` | 1165 |
 | `List A` — *same recursor, diff param* | `length (List Bool) [tt] = 1` | 725 |
-| `Eq` (**indexed**; J eliminator) | `eqrec Nat 0 C 1 0 (refl Nat 0) = 1` | 1206 |
+| `Eq` (**indexed**; J eliminator) | `eqrec Nat 0 C 1 0 (refl Nat 0) = 1` | 341 |
 
 The recursor types the generator builds, in de Bruijn:
 - `Bool.rec : Π C:(Bool→Sort u), C true → C false → Π x, C x`
