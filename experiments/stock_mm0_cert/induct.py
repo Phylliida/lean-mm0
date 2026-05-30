@@ -8,15 +8,22 @@ inductive into db_cert's registry so the certifier can typecheck/normalise
 terms over it.  This is what `src/inductive.py` does internally, re-expressed
 as pure stock-MM0 axioms with the reduction certified out of the trusted base.
 
-Scope: non-indexed inductives in a single fixed universe, now WITH parameters
-(uniform across constructors), so polymorphic List works in addition to Bool
-and monomorphic ListNat.  Parameters thread through the type former, every
-constructor, and the recursor; recursive occurrences reuse the same params.
-Indexed inductives (Eq, Vec) are still harder and left as documented next steps.
+Scope: single fixed universe, with PARAMETERS (uniform across constructors)
+and INDICES (varying per constructor), including the RECURSIVE + INDEXED case.
+Covers Bool, monomorphic ListNat, polymorphic List, the identity type Eq
+(J eliminator), and length-indexed vectors Vec (recursive AND indexed).
+
+The recursive+indexed case is the subtle one: a recursive field may sit at a
+DIFFERENT index than the constructor's output (Vec's tail xs : Vec A n inside
+vcons : ... -> Vec A (succ n)).  So each Fld carries rec_index_vals (the index
+values of that recursive occurrence), and the recursor's IH / the iota
+recursive call use the FIELD's indices, not the constructor's output index.
+Inductive.rec_calls() computes those concrete indices at reduction time.
 
 Validation: regenerating Nat reproduces db.mm1's hand-written recursor type
-verbatim (see run_induct.py) -- the correctness check for the de-Bruijn
-index arithmetic.
+verbatim, and List/Eq schemas match hand-built de Bruijn (see run_induct.py).
+The Vec recursor type is validated end-to-end: mm0-c accepts the certified
+vlength computation, which would fail if the IH index arithmetic were wrong.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field as dfield
@@ -54,11 +61,27 @@ def napps(head: N, args):
     for a in args: head = NApp(head, a)
     return head
 
+def _eval_n(t: N, env):
+    """Evaluate a (closed-over-env) named term to a db-term, resolving NVar via
+    `env` (name -> db-term).  Used to compute a recursive field's concrete index
+    values from concrete field values at iota-reduction time."""
+    if isinstance(t, NVar):   return env[t.name]
+    if isinstance(t, NConst): return Const(t.name)
+    if isinstance(t, NSort):  return ESort(t.lvl)
+    if isinstance(t, NApp):   return App(_eval_n(t.f, env), _eval_n(t.a, env))
+    raise TypeError(t)
+
 # ---------------- inductive spec ----------------
 @dataclass(frozen=True)
 class Fld:
     rec: bool                 # True = recursive occurrence of the type
-    ty: object = None         # if non-rec: an N term for the (closed) field type
+    ty: object = None         # if non-rec: an N term for the field type (may
+                              # reference params + earlier fields by name)
+    name: str = None          # binder name; defaults to f{i} by position
+    rec_index_vals: tuple = ()  # if rec AND indexed: the index values at which
+                              # this recursive occurrence sits (N terms, in scope
+                              # of params + earlier fields).  e.g. (NVar("n"),)
+                              # for vcons's tail field  xs : Vec A n.
 
 @dataclass(frozen=True)
 class Ctor:
@@ -83,12 +106,35 @@ class Inductive:
     rec_type: T = None        # full recursor type
     ctor_types: dict = dfield(default_factory=dict)
 
+    def rec_calls(self, cidx, params, cfields):
+        """For constructor `cidx` applied to concrete db-term params + fields,
+        return [(field_pos, [index db-terms]), ...] for each recursive field.
+        The certifier uses this to build the recursor's recursive call at the
+        field's own indices.  Non-indexed rec fields yield empty index lists."""
+        c = self.ctors[cidx]
+        fnames = _fnames(c)
+        env = {pn: pv for (pn, _), pv in zip(self.params, params)}
+        env.update({fnames[i]: cfields[i] for i in range(len(c.fields))})
+        out = []
+        for i, fl in enumerate(c.fields):
+            if fl.rec:
+                out.append((i, [_eval_n(iv, env) for iv in fl.rec_index_vals]))
+        return out
+
 # ---------------- schema construction ----------------
 # Schemas are built with parameter binders in scope.  `_tyapp` is the inductive
-# applied to params only (the recursive-occurrence type, non-indexed); for an
-# indexed inductive a recursive field is disallowed (see _build guard).
+# applied to params only; `_rec_field_ty` is the type of a recursive field,
+# which for an indexed inductive carries that field's own index values.
+def _fnames(c):
+    return [fl.name or f"f{i}" for i, fl in enumerate(c.fields)]
+
 def _tyapp(ind):
     return napps(NConst(ind.tycon), [NVar(n) for n, _ in ind.params])
+
+def _rec_field_ty(ind, fl):
+    # tycon @ params @ (this recursive field's index values)
+    return napps(NConst(ind.tycon),
+                 [NVar(n) for n, _ in ind.params] + list(fl.rec_index_vals))
 
 def _tyapp_idx(ind):
     """tycon applied to params AND the index binder names (for C's kind/tail)."""
@@ -102,24 +148,31 @@ def _wrap_binders(binders, body):
 
 def _ctor_type_N(ind, c):
     # result type: tycon @ params @ (this ctor's index values)
+    fnames = _fnames(c)
     body = napps(NConst(ind.tycon),
                  [NVar(n) for n, _ in ind.params] + list(c.index_vals))
-    for fl in reversed(c.fields):
-        fty = _tyapp(ind) if fl.rec else fl.ty
-        body = NPi("_", fty, body)
+    for i in reversed(range(len(c.fields))):       # named field binders
+        fl = c.fields[i]
+        fty = _rec_field_ty(ind, fl) if fl.rec else fl.ty
+        body = NPi(fnames[i], fty, body)
     return _wrap_binders(ind.params, body)
 
 def _minor_N(ind, c):
-    """C (c.index_vals) (c params f0..fn)  wrapped by IHs then fields."""
-    fnames = [f"f{i}" for i in range(len(c.fields))]
+    """C (c.index_vals) (c params fields)  wrapped by IHs then fields.
+    An IH for a recursive field uses THAT field's index values (e.g. n for
+    vcons's tail), not the constructor's output index (succ n)."""
+    fnames = _fnames(c)
     capp = napps(NConst(c.name),
                  [NVar(n) for n, _ in ind.params] + [NVar(n) for n in fnames])
     body = napps(NVar("C"), list(c.index_vals) + [capp])
     for i in reversed(range(len(c.fields))):       # IHs, innermost-first
-        if c.fields[i].rec:                        # (only non-indexed; guarded)
-            body = NPi("_", NApp(NVar("C"), NVar(fnames[i])), body)
+        fl = c.fields[i]
+        if fl.rec:
+            ih = napps(NVar("C"), list(fl.rec_index_vals) + [NVar(fnames[i])])
+            body = NPi("_", ih, body)
     for i in reversed(range(len(c.fields))):       # field binders
-        fty = _tyapp(ind) if c.fields[i].rec else c.fields[i].ty
+        fl = c.fields[i]
+        fty = _rec_field_ty(ind, fl) if fl.rec else fl.ty
         body = NPi(fnames[i], fty, body)
     return body
 
@@ -145,12 +198,6 @@ def _tycon_type_N(ind):
     return _wrap_binders(ind.params, _wrap_binders(ind.indices, NSort(ind.level)))
 
 def _build(ind):
-    if ind.indices:                                # see module docstring
-        for c in ind.ctors:
-            if any(fl.rec for fl in c.fields):
-                raise NotImplementedError(
-                    f"{ind.tycon}: recursive fields in an INDEXED inductive "
-                    f"(ctor {c.name}) are not supported yet")
     ind.level_u = "u"                              # recursor is universe-poly in u
     ind.tycon_type = to_db(_tycon_type_N(ind), [])
     ind.rec_type = to_db(_rec_type_N(ind), [])
@@ -207,9 +254,9 @@ def _iota_axioms(ind) -> str:
     out = []
     for j, c in enumerate(ind.ctors):
         fvars = [f"a{i}" for i in range(len(c.fields))]
-        # map this ctor's field names (f0,f1,...) to axiom field vars (a0,a1,...)
+        # map this ctor's field names to axiom field vars (a0,a1,...)
         nmap = dict(pmap)
-        nmap.update({f"f{i}": fvars[i] for i in range(len(c.fields))})
+        nmap.update({fn: fvars[i] for i, fn in enumerate(_fnames(c))})
         idxstrs = [_render(iv, nmap) for iv in c.index_vals]
         ctor_args = pvars + fvars
         capp = "(" + " @ ".join([c.name] + ctor_args) + ")" if ctor_args else c.name
@@ -218,13 +265,15 @@ def _iota_axioms(ind) -> str:
         tyapp = "(" + " @ ".join([ind.tycon] + tyargs) + ")" if tyargs else ind.tycon
         # LHS recursor application: rec_head @ <ctor index vals> @ (ctor ...)
         lhs = "(" + " @ ".join([rec_head] + idxstrs + [capp]) + ")"
-        # contractum: m_j @ fields @ (rec_head @ f_r) for each rec field
+        # contractum: m_j @ fields @ (rec_head @ <rec field indices> @ f_r)
         rhs = mvars[j]
         for fv in fvars:
             rhs = f"({rhs} @ {fv})"
         for i, fl in enumerate(c.fields):
             if fl.rec:
-                rhs = f"({rhs} @ ({rec_head} @ {fvars[i]}))"
+                ridx = [_render(iv, nmap) for iv in fl.rec_index_vals]
+                reccall = "(" + " @ ".join([rec_head] + ridx + [fvars[i]]) + ")"
+                rhs = f"({rhs} @ {reccall})"
         binders = " ".join(pvars + ["C"] + mvars + fvars + ["mt"])
         out.append(
             f"axiom deq_iota_{c.name} (g: ctx) ({binders}: expr):\n"
@@ -270,3 +319,19 @@ EQ = Inductive("teq", "(lS lz)", [
 ], "eqrec",
     params=(("A", NSort("(lS lz)")), ("a", NVar("A"))),
     indices=(("b", NVar("A")),))
+
+# Length-indexed vectors -- RECURSIVE *and* INDEXED.  param A:Sort1; index n:Nat.
+#   vnil  : Vec A 0
+#   vcons : Pi n:Nat, Pi a:A, Pi xs:(Vec A n), Vec A (succ n)
+# The tail field xs lives at index n, but the ctor produces index (succ n) --
+# so the IH / recursive call use n, not (succ n).
+VEC = Inductive("tvec", "(lS lz)", [
+    Ctor("vnil", (), index_vals=(NConst("tzero"),)),
+    Ctor("vcons", (
+        Fld(rec=False, ty=NAT_T,      name="n"),
+        Fld(rec=False, ty=NVar("A"),  name="a"),
+        Fld(rec=True,  rec_index_vals=(NVar("n"),)),
+    ), index_vals=(NApp(NConst("tsucc"), NVar("n")),)),
+], "vrec",
+    params=(("A", NSort("(lS lz)")),),
+    indices=(("n", NAT_T),))

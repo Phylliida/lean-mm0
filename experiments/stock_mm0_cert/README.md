@@ -139,19 +139,24 @@ inductive so `db_cert`'s certifier (`prove_ht` / `whnf` /
 what `src/inductive.py` does internally, re-expressed as pure stock-MM0 axioms.
 
 Scope: one universe, **with parameters** (uniform across constructors) **and
-indices** (varying per constructor) — so polymorphic `List` and the identity
-type `Eq` (J eliminator) both work, alongside Bool and monomorphic ListNat.
-Covers nullary/n-ary ctors and recursive + data fields.  *Restriction:* an
-*indexed* inductive may not (yet) have *recursive* fields — so `Eq` works but
-`Vec`/`Nat.le` (recursive AND indexed) need per-IH index expressions; that's
-the remaining frontier.
+indices** (varying per constructor), **including the recursive + indexed case**
+— so polymorphic `List`, the identity type `Eq` (J eliminator), and
+length-indexed vectors `Vec` all work, alongside Bool and monomorphic ListNat.
+Covers nullary/n-ary ctors and recursive + data fields.
+
+The recursive+indexed case (`Vec`) is the subtle one: a recursive field can sit
+at a *different* index than the constructor's output — `vcons`'s tail is
+`xs : Vec A n` while `vcons : … → Vec A (succ n)`.  So each field carries its
+own `rec_index_vals`, and the IH / iota recursive call use the *field's* index
+(`n`), not the constructor's output index (`succ n`).  `Inductive.rec_calls()`
+computes those concrete indices at reduction time.
 
 **Correctness check:** regenerating Nat reproduces `db.mm1`'s hand-written
 recursor type *verbatim*; polymorphic List matches an independently hand-built
-de-Bruijn recursor type; and Eq's type-former + ctor match hand-built de Bruijn
-(`run_induct.py` asserts all of these) — so the (parametric + indexed) index
-arithmetic is right.  The Eq *recursor* type is validated end-to-end by mm0-c
-accepting the certified J-computation (a wrong rec type → a proof mm0-rs rejects).
+de-Bruijn recursor type; Eq's type-former + ctor match hand-built de Bruijn
+(`run_induct.py` asserts all of these).  The Eq and Vec *recursor* types are
+validated end-to-end: mm0-c accepts the certified J- and vlength-computations,
+which would fail if the (IH) index arithmetic were wrong.
 
 Generated inductives + certified recursor computations (mm0-rs + mm0-c, all
 exit 0; node counts read from the actual run):
@@ -164,12 +169,14 @@ exit 0; node counts read from the actual run):
 | `List A` (parametric)            | `length (List Nat) [0,0] = 2` | 1165 |
 | `List A` — *same recursor, diff param* | `length (List Bool) [tt] = 1` | 725 |
 | `Eq` (**indexed**; J eliminator) | `eqrec Nat 0 C 1 0 (refl Nat 0) = 1` | 341 |
+| `Vec` (**recursive + indexed**)  | `vlength Nat [7,7] = 2` | 1453 |
 
 The recursor types the generator builds, in de Bruijn:
 - `Bool.rec : Π C:(Bool→Sort u), C true → C false → Π x, C x`
 - `ListNat.rec : Π C:(L→Sort u), C nil → (Π h:Nat, Π t:L, C t → C (cons h t)) → Π x, C x`
 - `List.rec : Π A:Sort1, Π C:(List A→Sort u), C(nil A) → (Π h:A, Π t:List A, C t → C(cons A h t)) → Π x, C x`
 - `Eq.rec (J) : Π A:Sort1, Π a:A, Π C:(Π b:A, Eq A a b → Sort u), C a (refl A a) → Π b:A, Π h:Eq A a b, C b h`
+- `Vec.rec : Π A:Sort1, Π C:(Π n:Nat, Vec A n → Sort u), C 0 (vnil A) → (Π n:Nat, Π a:A, Π xs:Vec A n, C n xs → C (succ n) (vcons A n a xs)) → Π n:Nat, Π x:Vec A n, C n x`
 
 For an indexed inductive the motive abstracts over the indices **and** the
 major (`C : Π b, Eq A a b → Sort u`), each constructor pins the indices to
@@ -195,7 +202,7 @@ python3 run_layer2.py      # beta certificates           (lean.mm1 track)
 python3 run_iota.py        # recursor (iota), abstract   (lean.mm1 track)
 python3 run_db.py          # concrete numerals, 1+1=2    (de-Bruijn track)
 python3 run_db_typed.py    # typed theorem via ht_conv   (de-Bruijn track)
-python3 run_induct.py      # general inductives: Bool, ListNat, List A, Eq (de-Bruijn)
+python3 run_induct.py      # inductives: Bool, ListNat, List A, Eq, Vec (de-Bruijn)
 ```
 Each prints the generated `.mm1`, a node-count table, and the verdict from
 both checkers.  Generated fragments land in `_gen_layer{1,2}.mm1`.
@@ -260,12 +267,13 @@ Reading it honestly:
 3. ✅ **Recursor typing + gated ι** (`ht_rec`, gated `deq_iota_*`) — ι is now
    a sound, type-preserving equality; the emitter discharges the typing gate
    automatically.  Nat is a typed primitive.
-4. ✅ **General non-indexed inductives, incl. parameters** (`induct.py`) — a
-   generator emits the per-inductive axiom block + registers it; validated by
-   reproducing Nat *and* polymorphic List; Bool, ListNat, and `List A` certified.
-5. **Indexed inductives + level equations.**  `Eq`/`Vec` (indices, à la
-   `lean.mm1`'s `Ind`/`Ctor`/`Rec`), and the `lvl` equations (`lmax`/`limax`
-   laws) our verifier normalises.
+4. ✅ **General inductives — parameters, indices, recursive+indexed**
+   (`induct.py`) — a generator emits the per-inductive axiom block + registers
+   it; validated by reproducing Nat / List / Eq schemas; Bool, ListNat,
+   `List A`, `Eq` (J), and `Vec` (recursive+indexed) all certified.
+5. **Level equations + mutual inductives.**  The `lvl` equations
+   (`lmax`/`limax` laws) our verifier normalises, and mutual inductive blocks
+   (cross-recursors).
 6. **δ.**  MM0 statement-level `def` unfolding for our `def`s.
 7. **Kernel integration.**  Drive the emitter from our `src/expr.py` CIC AST
    (it already maps onto these de-Bruijn terms), replacing `src/emitter.py`'s

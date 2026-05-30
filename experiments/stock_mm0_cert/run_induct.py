@@ -6,7 +6,7 @@ import db_cert
 from db_cert import (T, Var, App, Lam, Const, ESort, EPi, pp, prove_norm,
                      proof_nodes, TNAT, TZERO, TSUCC)
 import induct
-from induct import NAT, BOOL, LNAT, LIST, EQ
+from induct import NAT, BOOL, LNAT, LIST, EQ, VEC
 
 MM0   = "/home/bepis/prog/scientific-computing/mm0"
 MM0RS = f"{MM0}/mm0-rs/target/release/mm0-rs"
@@ -141,6 +141,26 @@ def demos():
         [TNAT, TZERO, motive, numeral(1), TZERO, refl0])
     yield ("J on refl: eqrec Nat 0 C 1 0 (refl Nat 0) = 1", jrule, numeral(1))
 
+    # ---- RECURSIVE + INDEXED: Vec.  vlength extracts the length index. ----
+    #   vrec A C m0 m1 : Pi n, Pi x:Vec A n, C n x.   Motive C = \n.\_. Nat.
+    #   m0 (vnil)  = 0;   m1 n a xs ih = succ ih.
+    def vec(A, *xs):                        # Vec A k literal for k = len(xs)
+        t = App(C("vnil"), A)
+        for i, x in enumerate(reversed(xs)):
+            k = i                           # tail length so far
+            t = db_cert.curry(C("vcons"), [A, numeral(k), x, t])
+        return t
+    def vlength(A):                         # : Pi n, Vec A n -> Nat
+        Cmot = Lam(TNAT, Lam(App(App(C("tvec"), A), Var(0)), TNAT))  # \n.\_. Nat
+        m0   = TZERO
+        m1   = Lam(TNAT, Lam(A, Lam(App(App(C("tvec"), A), Var(1)),
+                     Lam(TNAT, App(TSUCC, Var(0))))))   # \n a xs ih. succ ih
+        return db_cert.curry(C("vrec"), [A, Cmot, m0, m1])
+    # vlength Nat 2 [7,7] = 2   (apply at the major's index n=2 then the vector)
+    v2 = vec(TNAT, numeral(7), numeral(7))
+    call = App(App(vlength(TNAT), numeral(2)), v2)
+    yield ("Vec (rec+indexed): vlength Nat [7,7] = 2", call, numeral(2))
+
 
 def main():
     print("== validate generator ==")
@@ -148,9 +168,10 @@ def main():
     validate_list()
     validate_eq()
 
-    print("\n== generate Bool + ListNat + List + Eq blocks ==")
+    print("\n== generate Bool + ListNat + List + Eq + Vec blocks ==")
     blocks = (induct.generate(BOOL) + "\n" + induct.generate(LNAT)
-              + "\n" + induct.generate(LIST) + "\n" + induct.generate(EQ))
+              + "\n" + induct.generate(LIST) + "\n" + induct.generate(EQ)
+              + "\n" + induct.generate(VEC))
     prelude = open(f"{HERE}/db.mm1").read() + "\n" + blocks
     open(f"{HERE}/_gen_induct.mm1", "w").write(blocks)
 

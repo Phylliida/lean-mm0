@@ -195,9 +195,14 @@ def whnf(e: T):
                     _t, gate2 = prove_ht(curry(Const(mh.name), fargs), [])
                     iota = f"(deq_iota_{mh.name} {gate1} {gate2})"
                     contr = curry(minors[cidx], cfields)
+                    # recursive calls use each rec field's OWN index values (e.g.
+                    # vcons's tail sits at index n, while the ctor outputs succ n)
+                    rc_map = dict(ind.rec_calls(cidx, params, cfields))
                     for i, fl in enumerate(c.fields):
-                        if fl.rec:               # (indexed inductives have none)
-                            contr = App(contr, curry(head, rec_prefix + [cfields[i]]))
+                        if fl.rec:
+                            idxs = rc_map[i]
+                            contr = App(contr,
+                                        curry(head, rec_prefix + idxs + [cfields[i]]))
                     wc, cc = whnf(contr)
                     return wc, _trans(cong_f, _trans(cong_mj, _trans(iota, cc)))
     return g, cong_f
