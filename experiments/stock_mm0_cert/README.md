@@ -138,15 +138,20 @@ inductive so `db_cert`'s certifier (`prove_ht` / `whnf` /
 `prove_rec_partial_gen`) can typecheck and normalise terms over it.  This is
 what `src/inductive.py` does internally, re-expressed as pure stock-MM0 axioms.
 
-Scope: **non-indexed** inductives in one universe, now **with parameters**
-(uniform across constructors) — so polymorphic `List` works alongside Bool and
-monomorphic ListNat.  Covers nullary/n-ary ctors and recursive + data fields.
-(Indexed inductives like `Eq`/`Vec` are harder; left as the next step.)
+Scope: one universe, **with parameters** (uniform across constructors) **and
+indices** (varying per constructor) — so polymorphic `List` and the identity
+type `Eq` (J eliminator) both work, alongside Bool and monomorphic ListNat.
+Covers nullary/n-ary ctors and recursive + data fields.  *Restriction:* an
+*indexed* inductive may not (yet) have *recursive* fields — so `Eq` works but
+`Vec`/`Nat.le` (recursive AND indexed) need per-IH index expressions; that's
+the remaining frontier.
 
 **Correctness check:** regenerating Nat reproduces `db.mm1`'s hand-written
-recursor type *verbatim*, and regenerating polymorphic List matches an
-independently hand-built de-Bruijn recursor type (`run_induct.py` asserts both
-structural equalities) — so the (parametric) index arithmetic is right.
+recursor type *verbatim*; polymorphic List matches an independently hand-built
+de-Bruijn recursor type; and Eq's type-former + ctor match hand-built de Bruijn
+(`run_induct.py` asserts all of these) — so the (parametric + indexed) index
+arithmetic is right.  The Eq *recursor* type is validated end-to-end by mm0-c
+accepting the certified J-computation (a wrong rec type → a proof mm0-rs rejects).
 
 Generated inductives + certified recursor computations (mm0-rs + mm0-c, all
 exit 0; node counts read from the actual run):
@@ -158,11 +163,18 @@ exit 0; node counts read from the actual run):
 | `ListNat`                        | `length [0,0,0] = 3` | 859 |
 | `List A` (parametric)            | `length (List Nat) [0,0] = 2` | 1165 |
 | `List A` — *same recursor, diff param* | `length (List Bool) [tt] = 1` | 725 |
+| `Eq` (**indexed**; J eliminator) | `eqrec Nat 0 C 1 0 (refl Nat 0) = 1` | 1206 |
 
 The recursor types the generator builds, in de Bruijn:
 - `Bool.rec : Π C:(Bool→Sort u), C true → C false → Π x, C x`
 - `ListNat.rec : Π C:(L→Sort u), C nil → (Π h:Nat, Π t:L, C t → C (cons h t)) → Π x, C x`
 - `List.rec : Π A:Sort1, Π C:(List A→Sort u), C(nil A) → (Π h:A, Π t:List A, C t → C(cons A h t)) → Π x, C x`
+- `Eq.rec (J) : Π A:Sort1, Π a:A, Π C:(Π b:A, Eq A a b → Sort u), C a (refl A a) → Π b:A, Π h:Eq A a b, C b h`
+
+For an indexed inductive the motive abstracts over the indices **and** the
+major (`C : Π b, Eq A a b → Sort u`), each constructor pins the indices to
+specific values (`refl` sets `b := a`), and the gated ι fires when the major's
+index pattern matches.
 
 Parameters thread through the type former (`List : Sort1 → Sort1`), every
 constructor (`cons : Π A, A → List A → List A`), and the recursor; recursive
@@ -183,7 +195,7 @@ python3 run_layer2.py      # beta certificates           (lean.mm1 track)
 python3 run_iota.py        # recursor (iota), abstract   (lean.mm1 track)
 python3 run_db.py          # concrete numerals, 1+1=2    (de-Bruijn track)
 python3 run_db_typed.py    # typed theorem via ht_conv   (de-Bruijn track)
-python3 run_induct.py      # general inductives: Bool, ListNat, List A (de-Bruijn)
+python3 run_induct.py      # general inductives: Bool, ListNat, List A, Eq (de-Bruijn)
 ```
 Each prints the generated `.mm1`, a node-count table, and the verdict from
 both checkers.  Generated fragments land in `_gen_layer{1,2}.mm1`.
@@ -278,10 +290,10 @@ Reading it honestly:
 - `run_db.py` — concrete ground computations incl. `1+1=2`.
 - `run_db_typed.py` — a typed theorem routing a reduction cert through
   `ht_conv`.
-- `induct.py` — generator for general non-indexed inductives (incl.
-  parameters): spec → stock-MM0 axiom block + registry entry.
-- `run_induct.py` — validates the generator against Nat and polymorphic List;
-  generates + certifies Bool, ListNat, and `List A` recursor computations.
+- `induct.py` — generator for general inductives (parameters + indices):
+  spec → stock-MM0 axiom block + registry entry.
+- `run_induct.py` — validates the generator against Nat, polymorphic List, and
+  Eq; generates + certifies Bool, ListNat, `List A`, and `Eq` (J) computations.
 - `bench.py` — speed benchmark (stock kernel check vs our verifier compute).
 
 Generated output (`_gen_*.mm1`) is gitignored.

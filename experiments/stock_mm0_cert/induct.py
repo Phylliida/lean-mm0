@@ -1,5 +1,5 @@
-"""General (non-indexed, parameter-supporting) inductive types for the
-de-Bruijn stock-MM0 prelude.
+"""General inductive types (parameters + indices) for the de-Bruijn
+stock-MM0 prelude.
 
 Given an inductive spec (type former, constructors with their fields, recursor),
 `generate(ind)` emits the stock-MM0 axiom block -- term decls, shf/sub closure,
@@ -64,6 +64,9 @@ class Fld:
 class Ctor:
     name: str
     fields: tuple             # tuple[Fld]
+    index_vals: tuple = ()    # tuple[N] — for an INDEXED inductive, the index
+                              # values this ctor produces (in scope of params +
+                              # its own fields).  () for non-indexed.
 
 @dataclass
 class Inductive:
@@ -73,55 +76,81 @@ class Inductive:
     rec_name: str             # recursor const, e.g. "brec"
     params: tuple = ()        # tuple[(name, N-kind)] uniform parameters, e.g.
                               #   (("A", NSort("(lS lz)")),) for List
+    indices: tuple = ()       # tuple[(name, N-kind)] index telescope (after the
+                              #   params), e.g. (("b", NVar("A")),) for Eq A a
     # filled in by _build():
-    tycon_type: T = None      # full type former type (Pi params, Sort level)
+    tycon_type: T = None      # full type former type (Pi params, Pi indices, Sort)
     rec_type: T = None        # full recursor type
     ctor_types: dict = dfield(default_factory=dict)
 
 # ---------------- schema construction ----------------
-# All schemas are built with parameter binders in scope; `_tyapp` is the
-# inductive applied to its parameters (the recursive-occurrence / result type).
+# Schemas are built with parameter binders in scope.  `_tyapp` is the inductive
+# applied to params only (the recursive-occurrence type, non-indexed); for an
+# indexed inductive a recursive field is disallowed (see _build guard).
 def _tyapp(ind):
     return napps(NConst(ind.tycon), [NVar(n) for n, _ in ind.params])
 
-def _wrap_params(ind, body):
-    for name, kind in reversed(ind.params):
+def _tyapp_idx(ind):
+    """tycon applied to params AND the index binder names (for C's kind/tail)."""
+    return napps(NConst(ind.tycon),
+                 [NVar(n) for n, _ in ind.params] + [NVar(n) for n, _ in ind.indices])
+
+def _wrap_binders(binders, body):
+    for name, kind in reversed(binders):
         body = NPi(name, kind, body)
     return body
 
 def _ctor_type_N(ind, c):
-    body = _tyapp(ind)
+    # result type: tycon @ params @ (this ctor's index values)
+    body = napps(NConst(ind.tycon),
+                 [NVar(n) for n, _ in ind.params] + list(c.index_vals))
     for fl in reversed(c.fields):
         fty = _tyapp(ind) if fl.rec else fl.ty
         body = NPi("_", fty, body)
-    return _wrap_params(ind, body)
+    return _wrap_binders(ind.params, body)
 
 def _minor_N(ind, c):
-    """C (c params f0..fn)  wrapped by IHs (C f_r per rec field) then fields."""
+    """C (c.index_vals) (c params f0..fn)  wrapped by IHs then fields."""
     fnames = [f"f{i}" for i in range(len(c.fields))]
     capp = napps(NConst(c.name),
                  [NVar(n) for n, _ in ind.params] + [NVar(n) for n in fnames])
-    body = NApp(NVar("C"), capp)
+    body = napps(NVar("C"), list(c.index_vals) + [capp])
     for i in reversed(range(len(c.fields))):       # IHs, innermost-first
-        if c.fields[i].rec:
+        if c.fields[i].rec:                        # (only non-indexed; guarded)
             body = NPi("_", NApp(NVar("C"), NVar(fnames[i])), body)
     for i in reversed(range(len(c.fields))):       # field binders
         fty = _tyapp(ind) if c.fields[i].rec else c.fields[i].ty
         body = NPi(fnames[i], fty, body)
     return body
 
+def _rec_C_kind(ind):
+    # C : Pi indices, (tycon params indices) -> Sort u
+    return _wrap_binders(ind.indices,
+                         NPi("_", _tyapp_idx(ind), NSort(ind.level_u)))
+
+def _rec_tail(ind):
+    # Pi indices, Pi x:(tycon params indices), C indices x
+    inner = NPi("x", _tyapp_idx(ind),
+                napps(NVar("C"), [NVar(n) for n, _ in ind.indices] + [NVar("x")]))
+    return _wrap_binders(ind.indices, inner)
+
 def _rec_type_N(ind):
-    Tapp = _tyapp(ind)
-    C_dom = NPi("_", Tapp, NSort(ind.level_u))     # C : (T params) -> Sort u
-    body = NPi("x", Tapp, NApp(NVar("C"), NVar("x")))
+    body = _rec_tail(ind)
     for c in reversed(ind.ctors):
         body = NPi("_", _minor_N(ind, c), body)
-    return _wrap_params(ind, NPi("C", C_dom, body))
+    body = NPi("C", _rec_C_kind(ind), body)
+    return _wrap_binders(ind.params, body)
 
 def _tycon_type_N(ind):
-    return _wrap_params(ind, NSort(ind.level))
+    return _wrap_binders(ind.params, _wrap_binders(ind.indices, NSort(ind.level)))
 
 def _build(ind):
+    if ind.indices:                                # see module docstring
+        for c in ind.ctors:
+            if any(fl.rec for fl in c.fields):
+                raise NotImplementedError(
+                    f"{ind.tycon}: recursive fields in an INDEXED inductive "
+                    f"(ctor {c.name}) are not supported yet")
     ind.level_u = "u"                              # recursor is universe-poly in u
     ind.tycon_type = to_db(_tycon_type_N(ind), [])
     ind.rec_type = to_db(_rec_type_N(ind), [])
@@ -161,17 +190,34 @@ def generate(ind) -> str:
     L.append(_iota_axioms(ind))
     return "\n".join(L) + "\n"
 
+# render an N-expression to MM0 surface syntax, mapping spec names -> axiom vars
+def _render(n, namemap):
+    if isinstance(n, NVar):   return namemap[n.name]
+    if isinstance(n, NConst): return n.name
+    if isinstance(n, NSort):  return f"(esort {n.lvl})"
+    if isinstance(n, NApp):   return f"({_render(n.f, namemap)} @ {_render(n.a, namemap)})"
+    raise TypeError(f"_render: unsupported index expr {n}")
+
 def _iota_axioms(ind) -> str:
     k = len(ind.ctors)
     pvars = [f"p{i}" for i in range(len(ind.params))]
+    pmap = {name: pvars[i] for i, (name, _) in enumerate(ind.params)}
     mvars = [f"m{i}" for i in range(k)]
     rec_head = "(" + " @ ".join([ind.rec_name] + pvars + ["C"] + mvars) + ")"
-    tyapp = "(" + " @ ".join([ind.tycon] + pvars) + ")" if pvars else ind.tycon
     out = []
     for j, c in enumerate(ind.ctors):
         fvars = [f"a{i}" for i in range(len(c.fields))]
+        # map this ctor's field names (f0,f1,...) to axiom field vars (a0,a1,...)
+        nmap = dict(pmap)
+        nmap.update({f"f{i}": fvars[i] for i in range(len(c.fields))})
+        idxstrs = [_render(iv, nmap) for iv in c.index_vals]
         ctor_args = pvars + fvars
         capp = "(" + " @ ".join([c.name] + ctor_args) + ")" if ctor_args else c.name
+        # the type former applied to params + this ctor's index values
+        tyargs = pvars + idxstrs
+        tyapp = "(" + " @ ".join([ind.tycon] + tyargs) + ")" if tyargs else ind.tycon
+        # LHS recursor application: rec_head @ <ctor index vals> @ (ctor ...)
+        lhs = "(" + " @ ".join([rec_head] + idxstrs + [capp]) + ")"
         # contractum: m_j @ fields @ (rec_head @ f_r) for each rec field
         rhs = mvars[j]
         for fv in fvars:
@@ -184,7 +230,7 @@ def _iota_axioms(ind) -> str:
             f"axiom deq_iota_{c.name} (g: ctx) ({binders}: expr):\n"
             f"  $ ht g {rec_head} mt $ >\n"
             f"  $ ht g {capp} {tyapp} $ >\n"
-            f"  $ deq g ({rec_head} @ {capp}) {rhs} $;")
+            f"  $ deq g {lhs} {rhs} $;")
     return "\n".join(out)
 
 
@@ -213,3 +259,14 @@ LIST = Inductive("tlist", "(lS lz)", [
     Ctor("pnil", ()),
     Ctor("pcons", (Fld(rec=False, ty=NVar("A")), Fld(rec=True))),
 ], "prec", params=(("A", NSort("(lS lz)")),))
+
+# Identity type / equality.  Indexed: params (A : Sort1) (a : A); index (b : A).
+#   teq   : Pi A:Sort1, Pi a:A, Pi b:A, Sort1
+#   refl  : Pi A:Sort1, Pi a:A, teq A a a              (index b := a)
+#   eqrec : Pi A, Pi a, Pi C:(Pi b:A, teq A a b -> Sort u),
+#             C a (refl A a) -> Pi b:A, Pi h:teq A a b, C b h    (the J rule)
+EQ = Inductive("teq", "(lS lz)", [
+    Ctor("refl_eq", (), index_vals=(NVar("a"),)),
+], "eqrec",
+    params=(("A", NSort("(lS lz)")), ("a", NVar("A"))),
+    indices=(("b", NVar("A")),))

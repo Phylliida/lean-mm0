@@ -6,7 +6,7 @@ import db_cert
 from db_cert import (T, Var, App, Lam, Const, ESort, EPi, pp, prove_norm,
                      proof_nodes, TNAT, TZERO, TSUCC)
 import induct
-from induct import NAT, BOOL, LNAT, LIST
+from induct import NAT, BOOL, LNAT, LIST, EQ
 
 MM0   = "/home/bepis/prog/scientific-computing/mm0"
 MM0RS = f"{MM0}/mm0-rs/target/release/mm0-rs"
@@ -62,6 +62,28 @@ def validate_list():
     assert ok, "generator disagrees with hand-built List -- parametric de Bruijn bug"
 
 
+def validate_eq():
+    """Indexed inductive Eq.  Check the simple schemas (type former + ctor)
+    against hand-built de Bruijn; the recursor type is validated end-to-end by
+    mm0-c accepting the certified J-computation below (a wrong rec type would
+    make prove_rec_partial_gen emit a proof mm0-rs rejects)."""
+    induct._build(EQ)
+    S1 = ESort("(lS lz)")
+    TEQ = Const("teq")
+    def teq3(a, b, c): return App(App(App(TEQ, a), b), c)
+    # teq : Pi A:Sort1, Pi a:A, Pi b:A, Sort1
+    tycon_exp = EPi(S1, EPi(Var(0), EPi(Var(1), S1)))
+    # refl : Pi A:Sort1, Pi a:A, teq A a a
+    refl_exp = EPi(S1, EPi(Var(0), teq3(Var(1), Var(0), Var(0))))
+    ok1 = EQ.tycon_type == tycon_exp
+    ok2 = EQ.ctor_types["refl_eq"] == refl_exp
+    print(f"  Eq type-former matches hand-built:  {ok1}")
+    print(f"  Eq refl ctor matches hand-built:    {ok2}")
+    if not ok1: print("   got:", pp(EQ.tycon_type))
+    if not ok2: print("   got:", pp(EQ.ctor_types['refl_eq']))
+    assert ok1 and ok2, "Eq schema disagrees with hand-built -- indexed bug"
+
+
 def C(name): return Const(name)
 
 def demos():
@@ -110,15 +132,25 @@ def demos():
     yield ("length (List Bool) [tt]    = 1",
            App(plength(C("tbool")), plst(C("tbool"), C("btrue"))), numeral(1))
 
+    # ---- indexed inductive Eq: the J eliminator computes on refl ----
+    # eqrec A a C cr b h  with  b:=a, h:=refl A a   reduces to  cr.
+    # Motive (non-dependent here):  C = \b:Nat. \h:(teq Nat 0 b). Nat.
+    motive = Lam(TNAT, Lam(App(App(App(C("teq"), TNAT), TZERO), Var(0)), TNAT))
+    refl0  = App(App(C("refl_eq"), TNAT), TZERO)         # refl : teq Nat 0 0
+    jrule  = db_cert.curry(C("eqrec"),
+        [TNAT, TZERO, motive, numeral(1), TZERO, refl0])
+    yield ("J on refl: eqrec Nat 0 C 1 0 (refl Nat 0) = 1", jrule, numeral(1))
+
 
 def main():
     print("== validate generator ==")
     validate_nat()
     validate_list()
+    validate_eq()
 
-    print("\n== generate Bool + ListNat + (polymorphic) List blocks ==")
+    print("\n== generate Bool + ListNat + List + Eq blocks ==")
     blocks = (induct.generate(BOOL) + "\n" + induct.generate(LNAT)
-              + "\n" + induct.generate(LIST))
+              + "\n" + induct.generate(LIST) + "\n" + induct.generate(EQ))
     prelude = open(f"{HERE}/db.mm1").read() + "\n" + blocks
     open(f"{HERE}/_gen_induct.mm1", "w").write(blocks)
 
@@ -147,6 +179,10 @@ def main():
     if os.path.exists(MM0C):
         rc = subprocess.run([MM0C, "/tmp/cert_induct.mmb"]).returncode
         print("mm0-c  verify:", "OK (exit 0)" if rc == 0 else f"FAIL ({rc})")
+
+
+if __name__ == "__main__":
+    main()
 
 
 main()

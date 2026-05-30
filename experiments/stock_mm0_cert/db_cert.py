@@ -170,16 +170,17 @@ def whnf(e: T):
             wc, cc = whnf(contractum)
             return wc, _trans(cong_f, _trans(cong_mj, _trans(iota, cc)))
     # general (generated) inductive recursor.  Application layout:
-    #   rec @ params(P) @ C @ minors(k) @ major
+    #   rec @ params(P) @ C @ minors(k) @ indices(I) @ major
     if isinstance(head, Const) and head.name in REC_OF:
         ind = REC_OF[head.name]
         P = len(ind.params)
         k = len(ind.ctors)
-        if len(args) == P + k + 2:
+        I = len(ind.indices)
+        if len(args) == P + 1 + k + I + 1:
             params = args[:P]
             C = args[P]
-            minors = args[P+1:P+1+k]
-            major = args[P+1+k]
+            minors = args[P + 1:P + 1 + k]
+            major = args[P + 1 + k + I]
             mj, cmj = whnf(major)
             cong_mj = f"(deq_app (deq_refl) {cmj})" if cmj else None
             mh, fargs = uncurry(mj)        # fargs = params(P) ++ fields
@@ -195,7 +196,7 @@ def whnf(e: T):
                     iota = f"(deq_iota_{mh.name} {gate1} {gate2})"
                     contr = curry(minors[cidx], cfields)
                     for i, fl in enumerate(c.fields):
-                        if fl.rec:
+                        if fl.rec:               # (indexed inductives have none)
                             contr = App(contr, curry(head, rec_prefix + [cfields[i]]))
                     wc, cc = whnf(contr)
                     return wc, _trans(cong_f, _trans(cong_mj, _trans(iota, cc)))
