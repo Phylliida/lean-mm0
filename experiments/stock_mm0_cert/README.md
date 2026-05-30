@@ -165,6 +165,33 @@ This is a property of `lean.mm1`'s **named-binder** representation, not of
 the approach.  **Our own verifier uses de Bruijn indices — no binder names,
 no α — which is precisely why it sidesteps this.**  So the concrete path is:
 
+## Speed: stock kernel (check) vs our verifier (compute)
+
+`bench.py` runs Church multiplication `mul C_n C_n ⟹ C_(n²)` (pure β) through
+both: our `src/mm0_verify._normalize` (computes the reduction — what our
+trusted verifier does) vs generate-then-check with stock `mm0-c` (zero
+computation in the kernel).
+
+| n | result | our verifier (PyPy) | **mm0-c check** | gen (untrusted) | cert |
+|---|---|---|---|---|---|
+| 8  | C₆₄  | 9.7 ms  | **1.0 ms**  | 32 ms  | 60 KB |
+| 16 | C₂₅₆ | 30.8 ms | **4.5 ms**  | 625 ms | 601 KB |
+| 24 | C₅₇₆ | 76 ms   | **19.5 ms** | 3.8 s  | 2.9 MB |
+| 28 | C₇₈₄ | 115 ms  | **35.7 ms** | 7.3 s  | 5.3 MB |
+
+Reading it honestly:
+- **The stock kernel checks several× faster than our verifier computes**
+  (~3× vs our PyPy fast-path at scale, ~25× vs CPython) — and it's an
+  815-line C program doing *no* computation, *while verifying every β-step*
+  (our `_normalize` just computes, trusting itself).
+- **But the certificate is large and must be generated.**  Generation
+  (untrusted Python) is ~8× *slower* than just computing, and certs reach MBs.
+  The expensive work moved OUT of the trusted base — it didn't vanish.
+- **So the win is architectural, not raw end-to-end speed:** the
+  correctness-critical surface shrinks to a tiny, fast, shared, soon-formally-
+  verified kernel; you pay in proof size + (untrusted) generation time.  Ideal
+  for "check a fixed corpus cheaply and trustably"; less so for tight dev loops.
+
 ## Roadmap
 
 1. ✅ **De-Bruijn prelude** (`db.mm1`) with `shift`/`subst1` as provable

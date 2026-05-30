@@ -155,11 +155,18 @@ def whnf(e: T):
     return g, cong_f
 
 def prove_norm(e: T):
-    """Full normal form; return (nf, conv|None) proving deq cnil e nf."""
+    """Full normal form; return (nf, conv|None) proving deq cnil e nf.
+    Reduces under binders too (via deq_lam / deq_pi congruence)."""
     wh, c1 = whnf(e)
     if isinstance(wh, App):
         f2, cf = prove_norm(wh.f); a2, ca = prove_norm(wh.a)
         return App(f2, a2), _trans(c1, _app_cong(cf, ca))
+    if isinstance(wh, Lam):
+        t2, ct = prove_norm(wh.ty); b2, cb = prove_norm(wh.body)
+        return Lam(t2, b2), _trans(c1, _deq_lam(ct, cb))
+    if isinstance(wh, EPi):
+        d2, cd = prove_norm(wh.dom); b2, cb = prove_norm(wh.body)
+        return EPi(d2, b2), _trans(c1, _deq_pi(cd, cb))
     return wh, c1
 
 # ---------------- conversion-proof generator:  deq g A B ----------------
