@@ -429,3 +429,32 @@ sort conversion.  `run_levels.py` certifies (mm0-rs + mm0-c both rc=0):
 Closed levels (the bridge's current scope) normalise to numerals; open/param
 levels beyond idempotence, and wiring this into a real kernel term whose
 *conversion* needs a level equation, are the follow-ups.
+
+
+## Capstone: a real `examples/*.lean` through stock mm0-c
+
+`capstone_demo.py` closes the loop -- it runs a real source file through the
+ACTUAL pipeline (`src.lean_parser.elaborate` = parser -> elaborator -> kernel),
+then AUTO-DETECTS that file's `de-refl` obligations and discharges them with
+stock mm0-c via the bridge -- **no `emitter.py`, no our `mm0_verify.py`**.
+
+`examples/math.lean` has `example : Eq Nat (Nat.add 5 0) 5 := Eq.refl Nat 5`
+(holds by computation).  `Eq.refl Nat 5 : Eq Nat 5 5` only typechecks because the
+kernel reduces the left side; `emitter.py` discharges that with `(de-refl ...)`.
+We instead elaborate the file and, for every decl whose type is `Eq Nat lhs rhs`
+over closed Nat, register the defs `lhs` uses (`Nat.add`), bridge `lhs`, and emit
+the explicit certificate `deq cnil lhs rhs` -- which both stock checkers accept:
+
+| de-refl obligation (`math.lean`) | result | proof nodes | mm0-rs | mm0-c |
+|---|---|---|---|---|
+| `Nat.add 5 0` | 5 | 214 | rc=0 | rc=0 |
+| `Nat.add 0 7` | 7 | 1474 | rc=0 | rc=0 |
+| `Nat.add 5 3` | 8 | 814 | rc=0 | rc=0 |
+
+(10 decls elaborated; 3 certified, 7 skipped; faithfulness-guarded against
+`src/kernel.py` whnf.)  Honest scope: this is the de-refl-replacement path on
+real elaborated source for the **direct-numeral Nat fragment**.  The nested
+`Nat.add 7 (Nat.add 8 9) = 24` currently SKIPS -- the hard-wired Nat-iota gate
+needs a numeral *major*, so nested def-apps don't reduce through it yet.  Full
+βιζ-evaluator retirement (every decl, universe-polymorphic defs,
+Bool/match/tactics, the whole suite) remains.

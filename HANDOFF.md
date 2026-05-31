@@ -989,3 +989,16 @@ Reproduce: from `experiments/stock_mm0_cert/`, run `python3 run_db.py`,
 `bridge_list_demo.py`, `bridge_bool_demo.py`, `bridge_eq_demo.py`, `bridge_vec_demo.py`, `bridge_delta_demo.py` (each prints results + both checkers' verdicts).  Build
 the checkers first (see the
 experiment README).
+
+
+## Capstone spike (real example -> stock mm0-c)
+
+`experiments/stock_mm0_cert/capstone_demo.py` drives a real `examples/math.lean`
+through the actual parser->elaborator->kernel, then discharges its `de-refl`
+obligations with stock mm0-c via the bridge -- no `emitter.py`, no
+`mm0_verify.py`.  3 of 10 elaborated decls (the closed-Nat computation-by-refl
+`Nat.add 5 0 / 0 7 / 5 3` = 5/7/8) certify at 214 / 1474 / 814 proof nodes,
+mm0-rs + mm0-c both rc=0, faithfulness-guarded against `src/kernel.py`.  The
+nested `Nat.add 7 (Nat.add 8 9)` and universe-polymorphic / Bool / tactic decls
+are skipped; the full βιζ-evaluator retirement (every decl, the whole suite)
+remains.
