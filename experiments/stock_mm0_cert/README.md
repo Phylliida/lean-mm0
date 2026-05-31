@@ -282,8 +282,8 @@ Reading it honestly:
    the reduction, and **mm0-c accepts it** — the first genuine kernel→stock-MM0
    data point (not a hand-built db_cert demo).  Faithfulness is guarded by
    cross-checking the db_cert normal form against `src/kernel.py`'s own whnf.
-   Spike result: `add 2 2 = 4`, kernel-nf and bridge-nf agree, **109 proof
-   nodes, 14536-byte cert, mm0-rs + mm0-c both exit 0.**  Scope is the closed
+   Spike result: `add 2 2 = 4`, kernel-nf and bridge-nf agree, **499 proof
+   nodes, 13960-byte cert, mm0-rs + mm0-c both exit 0.**  Scope is the closed
    Nat fragment (`bridge.to_db` raises `Unsupported` on anything else, on
    purpose).  Still untouched: driving a whole `examples/*.lean` through
    parser→elaborator→kernel→bridge, and replacing `src/emitter.py`'s `de-refl`
