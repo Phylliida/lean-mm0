@@ -275,10 +275,26 @@ Reading it honestly:
    (`lmax`/`limax` laws) our verifier normalises, and mutual inductive blocks
    (cross-recursors).
 6. **δ.**  MM0 statement-level `def` unfolding for our `def`s.
-7. **Kernel integration.**  Drive the emitter from our `src/expr.py` CIC AST
-   (it already maps onto these de-Bruijn terms), replacing `src/emitter.py`'s
-   `de-refl` shortcut with generated conversion certificates — at which point
-   the verifier's βιζ + shift/subst1 evaluator can leave the trusted base.
+7. 🟡 **Kernel integration (spike landed).**  `bridge.py` translates a real
+   `src/expr.py` CIC term (already de Bruijn) into the `db_cert` AST, mapping
+   `Nat.zero`/`Nat.succ`/`Nat.rec` → `tzero`/`tsucc`/`trec`.  `bridge_demo.py`
+   takes an actual prelude `Nat.rec` term (`add 2 2`), bridges it, certifies
+   the reduction, and **mm0-c accepts it** — the first genuine kernel→stock-MM0
+   data point (not a hand-built db_cert demo).  Faithfulness is guarded by
+   cross-checking the db_cert normal form against `src/kernel.py`'s own whnf.
+   Spike result: `add 2 2 = 4`, kernel-nf and bridge-nf agree, **109 proof
+   nodes, 14536-byte cert, mm0-rs + mm0-c both exit 0.**  Scope is the closed
+   Nat fragment (`bridge.to_db` raises `Unsupported` on anything else, on
+   purpose).  Still untouched: driving a whole `examples/*.lean` through
+   parser→elaborator→kernel→bridge, and replacing `src/emitter.py`'s `de-refl`
+   shortcut — that's what would move βιζ + shift/subst1 out of the *production*
+   trusted base.
+
+### Kernel-integration spike files
+- `bridge.py` — `src.expr.Expr` (+`Level`) → `db_cert.T`, Nat fragment only.
+- `bridge_demo.py` — builds a real `Nat.rec` term, bridges, certifies, checks
+  with mm0-rs + mm0-c; cross-checks against the real kernel's whnf.  Writes a
+  structured result to `/tmp/bridge_result.txt`.
 
 ## Files
 
