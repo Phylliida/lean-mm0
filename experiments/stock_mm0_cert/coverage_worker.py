@@ -110,19 +110,26 @@ def main():
             continue                          # not an obligation; don't count
         lhs, rhs = sides
         try:
+            # ORACLE: the real kernel must agree both sides convert (same normal
+            # form).  This is the de-refl obligation Eq.refl was discharging.
             kl = kernel_nf(K, lhs); kr = kernel_nf(K, rhs)
-            val = numval(kl)
-            if val is None or kl != kr:
-                skipped.append("nonclosed"); continue
+            if kl != kr:
+                skipped.append("not-convertible"); continue
+            val = numval(kl)                  # may be None (common nf not a numeral)
             for c in sorted(consts_in(lhs, set()) | consts_in(rhs, set())):
                 if env.has(c) and type(env.get(c)).__name__ == "Definition" \
                    and not env.get(c).level_params:
                     bridge.register_def(env, c)
             dl = bridge.to_db(lhs); dr = bridge.to_db(rhs)
-            nf, conv = db_cert.prove_norm(dl)
-            conv = conv or "(deq_refl)"
-            if db_cert.pp(nf) != db_cert.pp(dr):
-                skipped.append("nf-mismatch"); continue
+            # CONVERSION cert: normalise BOTH sides and bridge (prove_conv =
+            # deq_trans(norm lhs, sym(norm rhs))).  This handles an rhs that is
+            # itself a computation (e.g. add 5 3 = succ (add 4 3)), which the old
+            # "nf(lhs) == raw(rhs)" check wrongly rejected as nf-mismatch.
+            conv = db_cert.prove_conv(dl, dr) or "(deq_refl)"
+            # faithfulness: db_cert agrees both sides reduce to the same nf
+            nfa, _ = db_cert.prove_norm(dl); nfb, _ = db_cert.prove_norm(dr)
+            if db_cert.pp(nfa) != db_cert.pp(nfb):
+                skipped.append("bridge-nf-mismatch"); continue
             certified.append((name, val, db_cert.pp(dl), db_cert.pp(dr), conv,
                               db_cert.proof_nodes(conv)))
         except bridge.Unsupported as ex:
