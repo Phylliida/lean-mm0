@@ -458,3 +458,39 @@ real elaborated source for the **direct-numeral Nat fragment**.  The nested
 needs a numeral *major*, so nested def-apps don't reduce through it yet.  Full
 βιζ-evaluator retirement (every decl, universe-polymorphic defs,
 Bool/match/tactics, the whole suite) remains.
+
+
+## Universe-polymorphic defs (via monomorphisation)
+
+`bridge_poly_demo.py` extends the capstone past the monomorphic fragment to
+`examples/no_levels.lean`, which exercises universe-level *inference* -- the user
+writes no `.{u}` and the elaborator fills them.  Its de-refl obligations apply
+polymorphic defs at concrete levels:
+
+    auto_id_three  := id_poly.{1} Nat 3                       -- = 3
+    auto_const     := const_fn.{1,1} Nat Bool 7 Bool.true     -- = 7
+    succ_then_succ := compose3.{1,1,1} Nat Nat Nat succ succ 5 -- = 7
+
+`id_poly.{u}` / `const_fn.{u,v}` / `compose3.{u,v,w}` carry `Sort u` in
+their bodies, which the closed bridge can't represent directly.  The fix is
+**monomorphisation**: `bridge.register_def(env, name, levels)` instantiates the
+body at the concrete use-site levels (`inst_levels`), producing a closed db_cert
+def keyed by `(name, levels)` -- `id_poly.{1}` -> `id_poly_1` etc.  δ then
+unfolds it through mm0's own def-unfold, so this still adds **no trusted axiom**.
+`to_db` resolves a `Const(name, levels)` to its monomorphisation lazily (the
+moment it meets one inside another body), so nested poly applications just work.
+
+Verified (mm0-rs + mm0-c both rc=0; faithfulness-guarded against `src/kernel.py`):
+
+| de-refl obligation (`no_levels.lean`) | result | proof nodes | mm0-rs | mm0-c |
+|---|---|---|---|---|
+| `id_poly.{1} Nat 3`                  | 3 | 18    | rc=0 | rc=0 |
+| `const_fn.{1,1} Nat Bool 7 Bool.true`| 7 | 66 | rc=0 | rc=0 |
+| `compose3.{1,1,1} … succ succ 5`     | 7 | 145  | rc=0 | rc=0 |
+
+(9 decls elaborated; 3 certified, 6 skipped -- the skips are the `def`/`theorem`
+decls themselves, not `Eq Nat _ _` obligations.)  `const_fn 7 Bool.true` is a
+cross-inductive case: the demo emits the `Bool` block so `tbool`/`btrue` are
+declared.  Monomorphisation handles *concrete-level* poly use-sites; genuinely
+level-generic statements (a theorem quantified over `u`) would need level
+variables in db.mm1, which remains future work.

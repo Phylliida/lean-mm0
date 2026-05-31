@@ -1002,3 +1002,18 @@ mm0-rs + mm0-c both rc=0, faithfulness-guarded against `src/kernel.py`.  The
 nested `Nat.add 7 (Nat.add 8 9)` and universe-polymorphic / Bool / tactic decls
 are skipped; the full βιζ-evaluator retirement (every decl, the whole suite)
 remains.
+
+
+## Universe-polymorphic defs (monomorphisation) -- `bridge_poly_demo.py`
+
+Poly defs bridge by MONOMORPHISATION: `bridge.register_def(env, name, levels)`
+instantiates the body at concrete use-site levels via `inst_levels`, producing a
+closed db_cert def (`id_poly.{1}` -> `id_poly_1`); `to_db` resolves
+`Const(name, levels)` to its monomorphisation lazily.  δ unfolds it through mm0's
+native def-unfold -- still no trusted axiom.  `examples/no_levels.lean` (universe
+inference, no `.{u}` written) certifies 3 de-refl obligations through stock
+mm0-c: `id_poly.{1} Nat 3 = 3` (18 nodes), `const_fn.{1,1} Nat Bool 7
+Bool.true = 7` (66; cross-inductive, needs the Bool block), and
+`compose3.{1,1,1} … 5 = 7` (145).  mm0-rs + mm0-c both rc=0,
+faithfulness-guarded.  Level-generic statements (quantified over `u`) would need
+level variables in db.mm1 -- future work.

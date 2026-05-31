@@ -101,6 +101,27 @@ def level_to_str(l) -> str:
     raise Unsupported(f"level {l!r} (only closed lz/lS towers supported)")
 
 
+def level_to_nat(l) -> int:
+    """Closed level (lS-tower over lz) -> its numeral, for sanitized def names."""
+    n = 0
+    while isinstance(l, LSucc):
+        n += 1; l = l.arg
+    if isinstance(l, LZero):
+        return n
+    raise Unsupported(f"level {l!r} (only closed lz/lS towers supported)")
+
+
+# Universe-polymorphic defs are MONOMORPHISED at each concrete use-site: a def
+# `d.{u}` used as `d.{1}` becomes a distinct closed db_cert def `d_1` whose body
+# is `inst_levels(d.value, d.level_params, [1])`.  MONO maps (name, level-strings)
+# -> the db_cert Const for that instantiation; _ENV lets to_db lazily register a
+# poly def the moment it meets it inside another body.  (db.mm1 erases the sort
+# universe on inductives, so Nat/Bool/List stay level-agnostic in CONST_MAP; only
+# *defs* whose bodies mention `Sort u` need per-instantiation monomorphisation.)
+MONO = {}
+_ENV = None
+
+
 def to_db(e) -> object:
     """src.expr.Expr  ->  db_cert.T   (Nat / Bool / List fragments, closed)."""
     if isinstance(e, E.Sort):
@@ -116,7 +137,14 @@ def to_db(e) -> object:
     if isinstance(e, E.Const):
         if e.name in CONST_MAP:
             return CONST_MAP[e.name]          # Nat -> singleton (identity); Bool/List -> named const (matched by name)
-        raise Unsupported(f"Const {e.name!r} (outside the bridged Nat/Bool/List fragments)")
+        key = (e.name, tuple(level_to_str(l) for l in e.levels))
+        if key in MONO:
+            return MONO[key]                  # already-monomorphised poly def at these levels
+        # lazy: a polymorphic def used at concrete levels -> monomorphise on demand
+        if _ENV is not None and _ENV.has(e.name) \
+           and type(_ENV.get(e.name)).__name__ == "Definition":
+            return register_def(_ENV, e.name, e.levels)
+        raise Unsupported(f"Const {e.name!r} (outside the bridged fragments)")
     raise Unsupported(f"{type(e).__name__}")
 
 
@@ -133,22 +161,49 @@ def _consts_in(e, acc):
     return acc
 
 
-def register_def(env, name):
-    """Register a prelude Definition for δ: map its Const to a sanitized db_cert
-    name and put its bridged body in db_cert.DEFS (recursively for any defs the
-    body uses, so they're declared first).  Idempotent.  δ then rides mm0's
-    native def-unfold -- db_cert.gen_def_block() emits one `def` per entry and
-    adds NO trusted axiom.  Returns the db_cert Const for `name`."""
-    if name in CONST_MAP:
-        return CONST_MAP[name]
+def _register_mono_deps(env, name, body):
+    """Eagerly register the MONOMORPHIC defs `body` uses (so they precede it in
+    DEFS).  Polymorphic deps are left to to_db's lazy path, which registers them
+    at their concrete use-site levels."""
+    for c in sorted(_consts_in(body, set())):
+        if c != name and env.has(c) and type(env.get(c)).__name__ == "Definition" \
+           and not env.get(c).level_params:
+            register_def(env, c)
+
+
+def register_def(env, name, levels=()):
+    """Register a Definition for delta and return its db_cert Const.
+
+    Monomorphic defs key by name in CONST_MAP (as before).  Universe-polymorphic
+    defs are MONOMORPHISED at the given concrete `levels`: the body is
+    level-instantiated (inst_levels) into a closed term, keyed by (name, levels)
+    in MONO under a sanitized name carrying the level tag (id_poly.{1} -> id_poly_1).
+    Either way the bridged body lands in db_cert.DEFS, so delta rides mm0's native
+    def-unfold and adds NO trusted axiom.  Idempotent."""
+    global _ENV
+    _ENV = env
     d = env.get(name)
     if type(d).__name__ != "Definition":
         raise Unsupported(f"{name!r} is not a Definition ({type(d).__name__})")
+
+    if d.level_params:                       # polymorphic: monomorphise at `levels`
+        if len(levels) != len(d.level_params):
+            raise Unsupported(f"{name!r} needs {len(d.level_params)} levels, got {len(levels)}")
+        key = (name, tuple(level_to_str(l) for l in levels))
+        if key in MONO:
+            return MONO[key]
+        body = E.inst_levels(d.value, d.level_params, tuple(levels))
+        san = sanitize(name) + "_" + "_".join(str(level_to_nat(l)) for l in levels)
+        MONO[key] = TConst(san)              # placeholder first (breaks cycles)
+        _register_mono_deps(env, name, body)
+        db_cert.DEFS[san] = to_db(body)      # to_db lazily registers nested poly defs
+        return MONO[key]
+
+    if name in CONST_MAP:                     # monomorphic
+        return CONST_MAP[name]
     body = d.value
-    for c in sorted(_consts_in(body, set())):
-        if c != name and env.has(c) and type(env.get(c)).__name__ == "Definition":
-            register_def(env, c)
     san = sanitize(name)
-    CONST_MAP[name] = TConst(san)        # so to_db maps name -> san below
+    CONST_MAP[name] = TConst(san)            # placeholder first (so to_db maps name -> san)
+    _register_mono_deps(env, name, body)
     db_cert.DEFS[san] = to_db(body)
     return CONST_MAP[name]
