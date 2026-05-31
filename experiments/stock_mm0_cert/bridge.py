@@ -3,7 +3,7 @@ db_cert de-Bruijn AST, so a genuine kernel term can be certified through
 stock mm0-c -- instead of the hand-built demo terms used elsewhere here.
 
 Scope (deliberately tiny -- this is one end-to-end data point, not the whole
-pipeline): the closed Nat fragment, Bool, parametric List, the indexed type Eq, and the recursive-indexed Vec.  Supported `Expr` nodes: Sort, BVar, App,
+pipeline): the closed Nat fragment, Bool, parametric List, the indexed type Eq, and the recursive-indexed Vec; plus δ-unfolding of prelude `def`s (Nat.add, Nat.pred) via register_def.  Supported `Expr` nodes: Sort, BVar, App,
 Lam, Pi, and Const for {Nat,Nat.zero,Nat.succ,Nat.rec}, {Bool,Bool.false,Bool.true,Bool.rec}, {List,List.nil,List.cons,List.rec}, {Eq,Eq.refl,Eq.rec}, and {Vec,Vec.nil,Vec.cons,Vec.rec}.  Everything else
 raises Unsupported, on purpose, so we never silently mistranslate.
 
@@ -118,3 +118,37 @@ def to_db(e) -> object:
             return CONST_MAP[e.name]          # Nat -> singleton (identity); Bool/List -> named const (matched by name)
         raise Unsupported(f"Const {e.name!r} (outside the bridged Nat/Bool/List fragments)")
     raise Unsupported(f"{type(e).__name__}")
+
+
+# ---------------- δ: register prelude definitions ----------------
+def sanitize(name: str) -> str:
+    """CIC const name -> a valid mm0 identifier (mm0 ids have no '.')."""
+    return name.replace(".", "_").replace("'", "p")
+
+
+def _consts_in(e, acc):
+    if isinstance(e, E.Const):           acc.add(e.name)
+    elif isinstance(e, E.App):           _consts_in(e.fn, acc); _consts_in(e.arg, acc)
+    elif isinstance(e, (E.Lam, E.Pi)):   _consts_in(e.dom, acc); _consts_in(e.body, acc)
+    return acc
+
+
+def register_def(env, name):
+    """Register a prelude Definition for δ: map its Const to a sanitized db_cert
+    name and put its bridged body in db_cert.DEFS (recursively for any defs the
+    body uses, so they're declared first).  Idempotent.  δ then rides mm0's
+    native def-unfold -- db_cert.gen_def_block() emits one `def` per entry and
+    adds NO trusted axiom.  Returns the db_cert Const for `name`."""
+    if name in CONST_MAP:
+        return CONST_MAP[name]
+    d = env.get(name)
+    if type(d).__name__ != "Definition":
+        raise Unsupported(f"{name!r} is not a Definition ({type(d).__name__})")
+    body = d.value
+    for c in sorted(_consts_in(body, set())):
+        if c != name and env.has(c) and type(env.get(c)).__name__ == "Definition":
+            register_def(env, c)
+    san = sanitize(name)
+    CONST_MAP[name] = TConst(san)        # so to_db maps name -> san below
+    db_cert.DEFS[san] = to_db(body)
+    return CONST_MAP[name]

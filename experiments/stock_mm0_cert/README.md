@@ -379,3 +379,27 @@ bridge stayed structural.  `vlength [0]/[0,0]/[0,0,0] = 1/2/3` →
 With Vec the bridge spans the **entire inductive spectrum**: simple-recursive
 (Nat), enumeration (Bool), parametric (List), indexed (Eq), and
 recursive-indexed (Vec) -- every shape, real kernel term → 815-line C kernel.
+
+### δ: definitional unfolding (no new trusted axiom)
+
+`bridge_delta_demo.py` adds δ -- unfolding CIC `def`s.  The faithful trick: a
+CIC `def d := body` is emitted as a stock-MM0 `def d: expr = $ body $;`, so
+δ-unfolding becomes **mm0's own native def-unfold** -- the single proof-driven
+step the verifier already does -- adding **zero** trusted axioms.  In the
+certificate the δ step is even free: db_cert generates the proof about
+`body @ args`, and mm0 accepts it for the `d @ args` theorem because `d ≡ body`
+definitionally (`deq cnil d body` is literally `deq_refl`).
+
+`bridge.register_def(env, name)` maps a prelude Definition to a sanitized mm0
+identifier and registers its bridged body (recursively for nested defs);
+`db_cert.gen_def_block()` emits the `def`s.  Real prelude defs `Nat.add` and
+`Nat.pred` (bodies of pure Nat primitives) certify through δ+β+ι:
+
+| computation | proof nodes | mm0-rs | mm0-c |
+|---|---|---|---|
+| `Nat.add 2 3 = 5` | 748 | rc=0 | rc=0 |
+| `Nat.add 0 4 = 4` | 889 | rc=0 | rc=0 |
+| `Nat.pred 3 = 2`  | 183 | rc=0 | rc=0 |
+| `Nat.pred 0 = 0`  | 151 | rc=0 | rc=0 |
+
+(faithfulness-guarded against the real kernel's whnf, which does its own δ.)

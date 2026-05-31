@@ -36,6 +36,8 @@ TYCON   = {}   # tycon const name -> level string (the Sort it inhabits)
 CTOR_IX = {}   # ctor const name  -> (ind, index)
 REC_OF  = {}   # recursor name    -> ind
 ATOMIC  = set()  # every generated atomic const name (for shf/sub closure)
+DEFS    = {}   # def const name -> body T  (delta-unfold rides mm0's native
+               # def-unfold; adds NO trusted axiom -- see gen_def_block)
 
 def natlit(n: int) -> str:
     return "nO" if n == 0 else f"(nS {natlit(n-1)})"
@@ -78,6 +80,11 @@ def prove_shf(e: T, d: int, c: int):
             return e, f"(shf_{nat_names[e.name]})"
         if e.name in ATOMIC:
             return e, f"(shf_{e.name})"
+        if e.name in DEFS:                   # closed def -> shift-invariant
+            body = DEFS[e.name]
+            b2, pb = prove_shf(body, d, c)
+            assert b2 == body, f"def {e.name} body not shift-closed"
+            return e, pb
         raise KeyError(f"shf: unknown const {e.name}")
     if isinstance(e, App):
         f2, pf = prove_shf(e.f, d, c); a2, pa = prove_shf(e.a, d, c)
@@ -108,6 +115,11 @@ def prove_sub(b: T, v: T, j: int):
             return b, f"(sub_{nat_names[b.name]})"
         if b.name in ATOMIC:
             return b, f"(sub_{b.name})"
+        if b.name in DEFS:                   # closed def -> subst-invariant
+            body = DEFS[b.name]
+            b2, pb = prove_sub(body, v, j)
+            assert b2 == body, f"def {b.name} body not subst-closed"
+            return b, pb
         raise KeyError(f"sub: unknown const {b.name}")
     if isinstance(b, App):
         f2, pf = prove_sub(b.f, v, j); a2, pa = prove_sub(b.a, v, j)
@@ -142,6 +154,9 @@ def _app_cong(cf, ca):
 
 def whnf(e: T):
     """Weak-head reduce; return (wh, conv|None) with conv proving deq cnil e wh."""
+    if isinstance(e, Const) and e.name in DEFS:
+        return whnf(DEFS[e.name])           # delta: unfold def -> body (free via
+                                            # mm0 def-unfold; proof stays about body)
     if not isinstance(e, App):
         return e, None
     f_wh, cf = whnf(e.f)
@@ -256,6 +271,7 @@ def prove_ht(e: T, ctx):
     if isinstance(e, Const):
         # compare by NAME, not identity: a `tnat` inside a generated schema is a
         # fresh Const("tnat"), not the module singleton TNAT.
+        if e.name in DEFS:    return prove_ht(DEFS[e.name], ctx)   # delta: type via body
         if e.name == "tnat":  return ESort("(lS lz)"), "(ht_nat)"
         if e.name == "tzero": return TNAT, "(ht_zero)"
         if e.name == "tsucc": return EPi(TNAT, TNAT), "(ht_succ)"
@@ -350,3 +366,12 @@ def prove_ht_nat(e: T) -> str:
 def proof_nodes(proof: str) -> int:
     import re
     return len(re.findall(r'[A-Za-z_]\w*', proof))
+
+
+def gen_def_block() -> str:
+    """Emit a stock-MM0 `def` for every registered def, so delta-unfolding is
+    mm0's OWN native def-unfold -- no trusted axiom per definition.  Emitted in
+    insertion order; the caller registers dependencies (inductives, earlier
+    defs) before the defs that use them."""
+    return "".join(f"def {name}: expr = $ {pp(body)} $;\n" for name, body in DEFS.items())
+
