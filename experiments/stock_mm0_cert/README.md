@@ -454,11 +454,13 @@ the explicit certificate `deq cnil lhs rhs` -- which both stock checkers accept:
 
 (10 decls elaborated; 4 certified, 6 skipped; faithfulness-guarded against
 `src/kernel.py` whnf.)  Honest scope: this is the de-refl-replacement path on
-real elaborated source for the **direct-numeral Nat fragment**.  The nested
-`Nat.add 7 (Nat.add 8 9) = 24` currently SKIPS -- the hard-wired Nat-iota gate
-needs a numeral *major*, so nested def-apps don't reduce through it yet.  Full
-βιζ-evaluator retirement (every decl, universe-polymorphic defs,
-Bool/match/tactics, the whole suite) remains.
+real elaborated source for the closed Nat fragment.  Nested computations like
+`Nat.add 7 (Nat.add 8 9) = 24` now certify too -- the hard-wired Nat-iota branch
+fully NORMALISES the recursor's major premise (`prove_norm`) before firing
+succ-iota, so a *computed* major reduces to a literal numeral first.  Full
+βιζ-evaluator retirement (every decl, the 6 skipped here being `def`/`theorem`
+decls rather than `Eq Nat _ _` obligations; plus Bool/match/tactics, the whole
+suite) remains.
 
 
 ## Universe-polymorphic defs (via monomorphisation)
