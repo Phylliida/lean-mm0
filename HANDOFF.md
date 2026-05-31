@@ -977,7 +977,7 @@ Still open (experiment README's roadmap):
 - the bridge now spans the **whole inductive spectrum** — Nat, Bool,
   parametric `List`, indexed `Eq` (J), and recursive-indexed `Vec`,
 - level equations (`lmax`/`limax` laws) and mutual inductives,
-- δ (statement-level `def` unfold),
+- δ (definitional unfolding) — **done**: a CIC `def d := body` becomes a stock-MM0 `def d: expr = $ body $;`, so δ rides mm0's **native def-unfold with no trusted axiom** (the cert's δ step is free — `deq cnil d body` is `deq_refl`).  `Nat.add`/`Nat.pred` certify through δ+β+ι (`bridge_delta_demo.py`),
 - drive a whole `examples/*.lean` through parser→elaborator→kernel→bridge and
   replace `src/emitter.py`'s `de-refl` shortcut with generated certificates.
   Only that full wiring would move the βιζ + shift/subst1 evaluator out of the
@@ -986,6 +986,6 @@ Still open (experiment README's roadmap):
 
 Reproduce: from `experiments/stock_mm0_cert/`, run `python3 run_db.py`,
 `run_db_typed.py`, `run_induct.py`, `bench.py`, `bridge_demo.py`,
-`bridge_list_demo.py` (each prints results + both checkers' verdicts).  Build
+`bridge_list_demo.py`, `bridge_bool_demo.py`, `bridge_eq_demo.py`, `bridge_vec_demo.py`, `bridge_delta_demo.py` (each prints results + both checkers' verdicts).  Build
 the checkers first (see the
 experiment README).
