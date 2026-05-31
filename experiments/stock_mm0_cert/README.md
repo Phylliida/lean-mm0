@@ -450,8 +450,9 @@ the explicit certificate `deq cnil lhs rhs` -- which both stock checkers accept:
 | `Nat.add 5 0` | 5 | 214 | rc=0 | rc=0 |
 | `Nat.add 0 7` | 7 | 1474 | rc=0 | rc=0 |
 | `Nat.add 5 3` | 8 | 814 | rc=0 | rc=0 |
+| `Nat.add 7 (Nat.add 8 9)` (nested) | 24 | 6726 | rc=0 | rc=0 |
 
-(10 decls elaborated; 3 certified, 7 skipped; faithfulness-guarded against
+(10 decls elaborated; 4 certified, 6 skipped; faithfulness-guarded against
 `src/kernel.py` whnf.)  Honest scope: this is the de-refl-replacement path on
 real elaborated source for the **direct-numeral Nat fragment**.  The nested
 `Nat.add 7 (Nat.add 8 9) = 24` currently SKIPS -- the hard-wired Nat-iota gate

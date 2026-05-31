@@ -1017,3 +1017,14 @@ Bool.true = 7` (66; cross-inductive, needs the Bool block), and
 `compose3.{1,1,1} … 5 = 7` (145).  mm0-rs + mm0-c both rc=0,
 faithfulness-guarded.  Level-generic statements (quantified over `u`) would need
 level variables in db.mm1 -- future work.
+
+## Nested recursor majors (general fix)
+
+The hard-wired Nat-iota branch in db_cert.whnf now NORMALISES the recursor's
+major premise (prove_norm) instead of weak-head reducing it.  A *computed*
+major (e.g. Nat.add 8 9 inside Nat.add 7 (Nat.add 8 9)) only weak-head-reduces
+to `succ K` with K an unreduced recursor app, but the succ-iota gate needs a
+literal numeral; full normalisation gives one.  `Nat.add 7 (Nat.add 8 9) = 24`
+now certifies (6726 nodes), lifting the capstone from 3 to 4 of math.lean's 10
+decls, mm0-rs + mm0-c both rc=0; run_induct / delta / poly unaffected (the
+general-inductive branch still uses whnf, which suffices there).

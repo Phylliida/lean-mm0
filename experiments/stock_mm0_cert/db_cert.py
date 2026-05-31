@@ -169,7 +169,12 @@ def whnf(e: T):
     head, args = uncurry(g)
     if head is TREC and len(args) == 4:             # recursor redex
         C, z, s, major = args
-        mj, cmj = whnf(major)
+        # Fully NORMALISE the major (not just whnf): when the major is itself a
+        # computation (e.g. Nat.add 8 9), whnf only exposes `succ K` with K an
+        # unreduced recursor app, and the succ-iota gate prove_ht_nat(K) needs a
+        # LITERAL numeral.  prove_norm reduces the major to succ^n zero, so the
+        # predecessor k below is always a literal.  Fixes nested Nat.add.
+        mj, cmj = prove_norm(major)
         cong_mj = f"(deq_app (deq_refl) {cmj})" if cmj else None
         if mj is TZERO:
             gate = prove_rec_partial(C, z, s)        # ht (trec@C@z@s) (Pi m, C m)
