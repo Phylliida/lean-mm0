@@ -938,17 +938,33 @@ generation.
 
 The arc answers the question **yes, for CIC's core**: βιζ, typing, conversion,
 and every inductive family (parametric, indexed, recursive+indexed) certify
-out of the trusted base and check under the 815-line C kernel.  Still open
-(documented in the experiment README's roadmap, none started):
+out of the trusted base and check under the 815-line C kernel.
+
+**Kernel-integration spike (landed; commits `eb129c9` + `a426cf3`).**  The
+first genuine connection from the *real* kernel to the stock checker — before
+this, every certificate was a hand-built `db_cert` demo term.  `bridge.py`
+translates a real `src/expr.py` term (already de Bruijn) into the `db_cert`
+AST for the **closed Nat fragment**, mapping `Nat`/`Nat.zero`/`Nat.succ`/
+`Nat.rec` onto `db_cert`'s singleton `tnat`/`tzero`/`tsucc`/`trec` (identity
+matters — `db_cert.whnf`'s Nat path tests `head is TREC`); anything outside the
+fragment raises `Unsupported` on purpose.  `bridge_demo.py` builds an actual
+prelude `Nat.rec` term (`add 2 2`), bridges it, certifies the reduction, and
+**both mm0-rs and mm0-c accept it** — with a faithfulness guard that
+cross-checks the `db_cert` normal form against `src/kernel.py`'s own whnf.
+Verified: `add 2 2 = 4`, kernel-nf and bridge-nf agree, **499 proof nodes,
+13960-byte cert, mm0-rs + mm0-c both rc=0**.
+
+Still open (experiment README's roadmap):
+- extend the bridge past Nat (Bool/List via `induct.py`, then indexed),
 - level equations (`lmax`/`limax` laws) and mutual inductives,
 - δ (statement-level `def` unfold),
-- **kernel integration** — drive the emitter from our real `src/expr.py` CIC
-  AST (it maps onto these de-Bruijn terms), replacing `src/emitter.py`'s
-  `de-refl` shortcut with generated certificates.  Only at that point would
-  the βιζ + shift/subst1 evaluator actually leave the *production* trusted
-  base; today this is a parallel proof-of-concept, not wired into the pipeline.
+- drive a whole `examples/*.lean` through parser→elaborator→kernel→bridge and
+  replace `src/emitter.py`'s `de-refl` shortcut with generated certificates.
+  Only that full wiring would move the βιζ + shift/subst1 evaluator out of the
+  *production* trusted base; today this is a parallel proof-of-concept that
+  certifies single real terms, not the example suite.
 
 Reproduce: from `experiments/stock_mm0_cert/`, run `python3 run_db.py`,
-`run_db_typed.py`, `run_induct.py`, `bench.py` (each prints results +
-both checkers' verdicts).  Build the checkers first (see the experiment
-README).
+`run_db_typed.py`, `run_induct.py`, `bench.py`, `bridge_demo.py` (each prints
+results + both checkers' verdicts).  Build the checkers first (see the
+experiment README).
