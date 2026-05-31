@@ -3,8 +3,8 @@ db_cert de-Bruijn AST, so a genuine kernel term can be certified through
 stock mm0-c -- instead of the hand-built demo terms used elsewhere here.
 
 Scope (deliberately tiny -- this is one end-to-end data point, not the whole
-pipeline): the closed Nat fragment, Bool, and parametric List.  Supported `Expr` nodes: Sort, BVar, App,
-Lam, Pi, and Const for {Nat,Nat.zero,Nat.succ,Nat.rec}, {Bool,Bool.false,Bool.true,Bool.rec}, and {List,List.nil,List.cons,List.rec}.  Everything else
+pipeline): the closed Nat fragment, Bool, parametric List, and the indexed type Eq.  Supported `Expr` nodes: Sort, BVar, App,
+Lam, Pi, and Const for {Nat,Nat.zero,Nat.succ,Nat.rec}, {Bool,Bool.false,Bool.true,Bool.rec}, {List,List.nil,List.cons,List.rec}, and {Eq,Eq.refl,Eq.rec}.  Everything else
 raises Unsupported, on purpose, so we never silently mistranslate.
 
 `src/expr.py` is ALREADY de Bruijn (BVar(idx)), and Nat.rec's argument order
@@ -69,6 +69,14 @@ CONST_MAP = {
     "Bool.false": TConst("bfalse"),
     "Bool.true":  TConst("btrue"),
     "Bool.rec":   TConst("brec"),
+    # Eq fragment -- INDEXED inductive (J / large elimination); names match the
+    # induct.EQ spec (tycon "teq", ctor "refl_eq", recursor "eqrec").  Eq's two
+    # params (A, a) and one index (b) are all ordinary App args in the prelude
+    # term (Eq.rec.{u,v} A a motive minor b major), matching db_cert's general
+    # iota layout params ++ C ++ minors ++ indices ++ major -- still structural.
+    "Eq":      TConst("teq"),
+    "Eq.refl": TConst("refl_eq"),
+    "Eq.rec":  TConst("eqrec"),
 }
 
 

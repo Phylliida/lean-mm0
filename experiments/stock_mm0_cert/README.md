@@ -358,3 +358,11 @@ selects its minor by position, the demo registers a *prelude-ordered* Bool spec
 (ctors `[bfalse, btrue]`) rather than `induct.BOOL`'s `[btrue, bfalse]`.
 Verified: `not true=false` / `not false=true` / `not (not true)=true` →
 **76 / 76 / 155 proof nodes, mm0-rs + mm0-c both rc=0**, faithfulness-guarded.
+
+`bridge_eq_demo.py` reaches the first **indexed** family: `Eq` with the **J**
+eliminator (2 params `A a`, 1 index `b`, single ctor `Eq.refl`).  The prelude's
+`Eq.rec.{u,v} A a motive minor b major` is the standard
+`params ++ motive ++ minors ++ indices ++ major` order, so the bridge stays
+structural.  The canonical J computation `Eq.rec C base refl = base`:
+`J 0/1/2 = 0/1/2` → **303 / 337 / 371 proof nodes, mm0-rs + mm0-c both rc=0**,
+faithfulness-guarded against the real kernel.
