@@ -260,6 +260,8 @@ def _conv_structural(A: T, B: T):
         return _deq_lam(prove_conv(A.ty, B.ty), prove_conv(A.body, B.body))
     if isinstance(A, App) and isinstance(B, App):
         return _app_cong(prove_conv(A.f, B.f), prove_conv(A.a, B.a))
+    if isinstance(A, ESort) and isinstance(B, ESort):
+        return f"(deq_sort {prove_leveq(A.lvl, B.lvl)})"
     raise ValueError(f"cannot convert:\n  {pp(A)}\n  {pp(B)}")
 
 # ---------------- typing certifier:  ht <ctx> e T ----------------
@@ -374,4 +376,60 @@ def gen_def_block() -> str:
     insertion order; the caller registers dependencies (inductives, earlier
     defs) before the defs that use them."""
     return "".join(f"def {name}: expr = $ {pp(body)} $;\n" for name, body in DEFS.items())
+
+
+# ---------------- universe level normalisation: leveq certificates ----------------
+def _parse_level(s):
+    toks = s.replace("(", " ( ").replace(")", " ) ").split()
+    pos = [0]
+    def _close():
+        assert toks[pos[0]] == ")", toks; pos[0] += 1
+    def parse():
+        t = toks[pos[0]]; pos[0] += 1
+        if t == "(":
+            op = toks[pos[0]]; pos[0] += 1
+            if op == "lS":
+                a = parse(); _close(); return ("lS", a)
+            if op in ("lmax", "limax"):
+                a = parse(); b = parse(); _close(); return (op, a, b)
+            raise ValueError(f"level op {op}")
+        if t == "lz": return ("lz",)
+        return ("param", t)
+    return parse()
+
+def _max_num(na, nb):
+    """na, nb closed numeral level strings -> (max numeral, leveq (lmax na nb) max)."""
+    if na == "lz": return nb, "(leveq_max0l)"
+    if nb == "lz": return na, "(leveq_max0r)"
+    a2 = na[4:-1]; b2 = nb[4:-1]               # strip "(lS " ... ")"
+    nm, pm = _max_num(a2, b2)
+    return f"(lS {nm})", f"(leveq_trans (leveq_maxS) (leveq_S {pm}))"
+
+def prove_norm_level(L):
+    """parsed level -> (canonical numeral string, proof of leveq L numeral).
+    Closed levels only (lz / lS / lmax / limax of closed levels)."""
+    tag = L[0]
+    if tag == "lz":   return "lz", "(leveq_refl)"
+    if tag == "lS":
+        n, p = prove_norm_level(L[1]); return f"(lS {n})", f"(leveq_S {p})"
+    if tag == "lmax":
+        na, pa = prove_norm_level(L[1]); nb, pb = prove_norm_level(L[2])
+        nm, pm = _max_num(na, nb)
+        return nm, f"(leveq_trans (leveq_max {pa} {pb}) {pm})"
+    if tag == "limax":
+        na, pa = prove_norm_level(L[1]); nb, pb = prove_norm_level(L[2])
+        cong = f"(leveq_imax {pa} {pb})"
+        if nb == "lz":
+            return "lz", f"(leveq_trans {cong} (leveq_imax0))"
+        nm, pm = _max_num(na, nb)
+        return nm, f"(leveq_trans {cong} (leveq_trans (leveq_imaxS) {pm}))"
+    raise ValueError(f"open/param level unsupported by the closed normalizer: {L}")
+
+def prove_leveq(s1, s2):
+    """Proof of  leveq s1 s2  for convertible CLOSED level strings."""
+    if s1 == s2: return "(leveq_refl)"
+    n1, p1 = prove_norm_level(_parse_level(s1))
+    n2, p2 = prove_norm_level(_parse_level(s2))
+    assert n1 == n2, f"levels not equal: {s1} ~> {n1}  vs  {s2} ~> {n2}"
+    return f"(leveq_trans {p1} (leveq_sym {p2}))"
 

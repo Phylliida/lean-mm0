@@ -103,6 +103,23 @@ axiom deq_beta (g: ctx) (t b a b2: expr):
 -- Typing judgment  ht G e T   ( G |- e : T ),  core CIC rules.
 -- ============================================================
 term ht: ctx > expr > expr > wff;
+-- ===== universe level equality: the semilattice laws the kernel normalises =====
+-- (the SPEC of universes, akin to ht_pi; closed levels reduce to numerals)
+term leveq: lvl > lvl > wff;
+axiom leveq_refl  (a: lvl):       $ leveq a a $;
+axiom leveq_sym   (a b: lvl):     $ leveq a b $ > $ leveq b a $;
+axiom leveq_trans (a b c: lvl):   $ leveq a b $ > $ leveq b c $ > $ leveq a c $;
+axiom leveq_S     (a b: lvl):     $ leveq a b $ > $ leveq (lS a) (lS b) $;
+axiom leveq_max   (a b c d: lvl): $ leveq a c $ > $ leveq b d $ > $ leveq (lmax a b) (lmax c d) $;
+axiom leveq_imax  (a b c d: lvl): $ leveq a c $ > $ leveq b d $ > $ leveq (limax a b) (limax c d) $;
+axiom leveq_max0l (b: lvl):       $ leveq (lmax lz b) b $;
+axiom leveq_max0r (a: lvl):       $ leveq (lmax a lz) a $;
+axiom leveq_maxS  (a b: lvl):     $ leveq (lmax (lS a) (lS b)) (lS (lmax a b)) $;
+axiom leveq_maxid (a: lvl):       $ leveq (lmax a a) a $;
+axiom leveq_imax0 (a: lvl):       $ leveq (limax a lz) lz $;
+axiom leveq_imaxS (a b: lvl):     $ leveq (limax a (lS b)) (lmax a (lS b)) $;
+axiom deq_sort    (g: ctx) (a b: lvl): $ leveq a b $ > $ deq g (esort a) (esort b) $;
+
 axiom ht_sort (g: ctx) (l: lvl): $ ht g (esort l) (esort (lS l)) $;
 axiom ht_var0 (g: ctx) (cT cT2: expr):
   $ shf cT (nS nO) nO cT2 $ > $ ht (ccons cT g) (evar nO) cT2 $;

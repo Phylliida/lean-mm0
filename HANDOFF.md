@@ -976,7 +976,7 @@ the opposite order): `not true=false` / `not false=true` / `not (not true)=true`
 Still open (experiment README's roadmap):
 - the bridge now spans the **whole inductive spectrum** — Nat, Bool,
   parametric `List`, indexed `Eq` (J), and recursive-indexed `Vec`,
-- level equations (`lmax`/`limax` laws) and mutual inductives,
+- level equations — **closed levels done** (`run_levels.py`): a `leveq` semilattice-laws block in db.mm1 + a db_cert normalizer certify universe `max`/`imax` equations (`max 2 3=3`, `imax 2 0=0` impredicative, ...) through mm0-rs + mm0-c, via `deq_sort: leveq a b → deq g (esort a)(esort b)`; open/param levels and mutual inductives remain,
 - δ (definitional unfolding) — **done**: a CIC `def d := body` becomes a stock-MM0 `def d: expr = $ body $;`, so δ rides mm0's **native def-unfold with no trusted axiom** (the cert's δ step is free — `deq cnil d body` is `deq_refl`).  `Nat.add`/`Nat.pred` certify through δ+β+ι (`bridge_delta_demo.py`),
 - drive a whole `examples/*.lean` through parser→elaborator→kernel→bridge and
   replace `src/emitter.py`'s `de-refl` shortcut with generated certificates.
@@ -985,7 +985,7 @@ Still open (experiment README's roadmap):
   certifies single real terms, not the example suite.
 
 Reproduce: from `experiments/stock_mm0_cert/`, run `python3 run_db.py`,
-`run_db_typed.py`, `run_induct.py`, `bench.py`, `bridge_demo.py`,
+`run_db_typed.py`, `run_induct.py`, `run_levels.py`, `bench.py`, `bridge_demo.py`,
 `bridge_list_demo.py`, `bridge_bool_demo.py`, `bridge_eq_demo.py`, `bridge_vec_demo.py`, `bridge_delta_demo.py` (each prints results + both checkers' verdicts).  Build
 the checkers first (see the
 experiment README).

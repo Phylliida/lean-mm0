@@ -403,3 +403,29 @@ identifier and registers its bridged body (recursively for nested defs);
 | `Nat.pred 0 = 0`  | 151 | rc=0 | rc=0 |
 
 (faithfulness-guarded against the real kernel's whnf, which does its own δ.)
+
+### Universe level equations
+
+The kernel decides `Sort u ≡ Sort v` by normalising universe levels (the
+semilattice lz / lS / lmax / limax) and comparing.  db.mm1 had the level
+operations but no level-*equality* judgment, so universe-equal sorts could only
+match when syntactically identical.  Added: a `leveq` judgment with the
+semilattice laws (a fixed ~13-axiom spec block in db.mm1, like `ht_pi` -- refl /
+sym / trans / congruence + max0l / max0r / maxS / maxid / imax0 / imaxS) and
+`deq_sort : leveq a b -> deq g (esort a) (esort b)`.  `db_cert.prove_leveq`
+normalises a closed level to its numeral with an explicit proof, hooked into
+sort conversion.  `run_levels.py` certifies (mm0-rs + mm0-c both rc=0):
+
+| level equation | result | proof nodes |
+|---|---|---|
+| `max 0 1`             | 1 | 5  |
+| `max 1 1`             | 1 | 9  |
+| `max 2 3` / `max 3 2` | 3 | 15 / 17 |
+| `imax 2 0` (impredicative) | 0 | 8 |
+| `imax 2 3`            | 3 | 20 |
+| `max 1 (max 0 2)`     | 2 | 15 |
+| `max u u = u` (open, parametric) | u | via `leveq_maxid` |
+
+Closed levels (the bridge's current scope) normalise to numerals; open/param
+levels beyond idempotence, and wiring this into a real kernel term whose
+*conversion* needs a level equation, are the follow-ups.
