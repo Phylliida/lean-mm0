@@ -968,12 +968,14 @@ real kernel.  The `[0,0]=2` cert is **1165 nodes — identical to the hand-built
 term and the hand-authored `db_cert` term are the very same proof.  (Earlier
 note correction: the real prelude *does* give `Bool` a genuine `Bool.rec`
 recursor — a probe that said otherwise had crashed on a `type_` attribute typo.
-Bool is bridgeable too, pending only a constructor-order check between the
-prelude and the `induct.BOOL` spec.)
+Bool now bridges too — the prelude orders Bool `false | true`, so
+`bridge_bool_demo.py` registers a prelude-ordered Bool spec (`induct.BOOL` is
+the opposite order): `not true=false` / `not false=true` / `not (not true)=true`
+→ 76 / 76 / 155 proof nodes, mm0-rs + mm0-c both rc=0.)
 
 Still open (experiment README's roadmap):
-- extend the bridge to **Bool** (recursor exists; verify ctor order) and the
-  **indexed** families (`Eq` / `Vec`) — parametric `List` now lands,
+- extend the bridge to the **indexed** families (`Eq` / `Vec`) — Nat, Bool, and
+  parametric `List` now land,
 - level equations (`lmax`/`limax` laws) and mutual inductives,
 - δ (statement-level `def` unfold),
 - drive a whole `examples/*.lean` through parser→elaborator→kernel→bridge and

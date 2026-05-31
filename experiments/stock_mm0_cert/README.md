@@ -352,6 +352,9 @@ against the real `src/kernel.py` whnf:
 term and the hand-authored `db_cert` term are the same proof.
 
 Note: the real prelude *does* give `Bool` a genuine `Bool.rec` recursor, so Bool
-is bridgeable as well — pending only a constructor-order check between the
-prelude (`Bool` may be `false | true`) and the `induct.BOOL` spec
-(`btrue | bfalse`), since a recursor selects its minor by constructor position.
+is bridged too (`bridge_bool_demo.py`).  The prelude orders Bool
+`false | true` (`Bool.false.index=0`, `Bool.true.index=1`); since a recursor
+selects its minor by position, the demo registers a *prelude-ordered* Bool spec
+(ctors `[bfalse, btrue]`) rather than `induct.BOOL`'s `[btrue, bfalse]`.
+Verified: `not true=false` / `not false=true` / `not (not true)=true` →
+**76 / 76 / 155 proof nodes, mm0-rs + mm0-c both rc=0**, faithfulness-guarded.

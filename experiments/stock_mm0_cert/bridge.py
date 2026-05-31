@@ -3,8 +3,8 @@ db_cert de-Bruijn AST, so a genuine kernel term can be certified through
 stock mm0-c -- instead of the hand-built demo terms used elsewhere here.
 
 Scope (deliberately tiny -- this is one end-to-end data point, not the whole
-pipeline): the closed Nat fragment.  Supported `Expr` nodes: Sort, BVar, App,
-Lam, Pi, and Const for {Nat, Nat.zero, Nat.succ, Nat.rec}.  Everything else
+pipeline): the closed Nat fragment, Bool, and parametric List.  Supported `Expr` nodes: Sort, BVar, App,
+Lam, Pi, and Const for {Nat,Nat.zero,Nat.succ,Nat.rec}, {Bool,Bool.false,Bool.true,Bool.rec}, and {List,List.nil,List.cons,List.rec}.  Everything else
 raises Unsupported, on purpose, so we never silently mistranslate.
 
 `src/expr.py` is ALREADY de Bruijn (BVar(idx)), and Nat.rec's argument order
@@ -60,6 +60,15 @@ CONST_MAP = {
     "List.nil":  TConst("pnil"),
     "List.cons": TConst("pcons"),
     "List.rec":  TConst("prec"),
+    # Bool fragment -- name-matched.  The recursor selects its minor by ctor
+    # POSITION, so the db_cert spec the demo registers must order the ctors the
+    # way the prelude does (false=0, true=1).  induct.BOOL uses the opposite
+    # order, so bridge_bool_demo.py registers its own prelude-ordered Bool spec
+    # (ctors [bfalse, btrue]) rather than induct.BOOL.  Names are order-agnostic.
+    "Bool":       TConst("tbool"),
+    "Bool.false": TConst("bfalse"),
+    "Bool.true":  TConst("btrue"),
+    "Bool.rec":   TConst("brec"),
 }
 
 
@@ -76,7 +85,7 @@ def level_to_str(l) -> str:
 
 
 def to_db(e) -> object:
-    """src.expr.Expr  ->  db_cert.T   (Nat fragment, closed)."""
+    """src.expr.Expr  ->  db_cert.T   (Nat / Bool / List fragments, closed)."""
     if isinstance(e, E.Sort):
         return ESort(level_to_str(e.level))
     if isinstance(e, E.BVar):
@@ -89,6 +98,6 @@ def to_db(e) -> object:
         return EPi(to_db(e.dom), to_db(e.body))
     if isinstance(e, E.Const):
         if e.name in CONST_MAP:
-            return CONST_MAP[e.name]          # db_cert singleton (identity matters)
-        raise Unsupported(f"Const {e.name!r} (not in the Nat fragment)")
+            return CONST_MAP[e.name]          # Nat -> singleton (identity); Bool/List -> named const (matched by name)
+        raise Unsupported(f"Const {e.name!r} (outside the bridged Nat/Bool/List fragments)")
     raise Unsupported(f"{type(e).__name__}")
