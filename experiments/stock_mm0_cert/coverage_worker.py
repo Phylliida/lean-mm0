@@ -166,7 +166,12 @@ def main():
         defblock = db_cert.gen_def_block()
         thms = [f"theorem cov_{i}: $ deq cnil {dl} {dr} $ =\n'{conv};\n"
                 for i, (nm, val, dl, dr, conv, nodes) in enumerate(certified)]
-        full = prelude + "\n" + blocks + "\n" + defblock + "\n" + "\n".join(thms)
+        # bridge.IND_EMITTED holds blocks for any user inductive (class/structure)
+        # auto-derived during this file's certification; they must precede the
+        # defblock (projections/instances) that reference them.
+        ind_blocks = "".join(bridge.IND_EMITTED)
+        full = (prelude + "\n" + blocks + "\n" + ind_blocks + "\n"
+                + defblock + "\n" + "\n".join(thms))
         mm1 = f"/tmp/cov_{base}.mm1"; mmb = f"/tmp/cov_{base}.mmb"
         open(mm1, "w").write(full)
         r = subprocess.run([MM0RS, "compile", mm1, mmb], capture_output=True, text=True)

@@ -25,6 +25,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 from src import expr as E
 import db_cert
+import induct
 from db_cert import Var, App as TApp, Lam as TLam, Const as TConst, ESort, EPi
 
 
@@ -121,6 +122,11 @@ def level_to_nat(l) -> int:
 MONO = {}
 _ENV = None
 
+# --- user inductives (classes / structures) auto-bridged from the kernel ---
+IND_EMITTED = []     # generated stock-MM0 blocks, in dependency (emission) order
+IND_CONST = {}       # (kernel const name, level tag) -> db_cert TConst
+_IND_REG = set()     # (inductive name, level tag) already generated
+
 
 def to_db(e) -> object:
     """src.expr.Expr  ->  db_cert.T   (Nat / Bool / List fragments, closed)."""
@@ -137,8 +143,18 @@ def to_db(e) -> object:
     if isinstance(e, E.Const):
         if e.name in CONST_MAP:
             return CONST_MAP[e.name]          # Nat -> singleton (identity); Bool/List -> named const (matched by name)
-        key = (e.name, tuple(level_to_str(l) for l in e.levels))
-        if key in MONO:
+        # inductive tycon / ctor / recursor -- handle BEFORE the MONO-key below,
+        # because a recursor's motive level can be an imax that level_to_str
+        # (closed-tower only) won't render; the recursor mapping only needs the
+        # type's first level anyway.
+        tc = _try_inductive_const(e.name, e.levels)
+        if tc is not None:
+            return tc
+        try:
+            key = (e.name, tuple(level_to_str(l) for l in e.levels))
+        except Unsupported:
+            key = None                        # non-closed level: not a MONO key
+        if key is not None and key in MONO:
             return MONO[key]                  # already-monomorphised poly def at these levels
         # lazy: a polymorphic def used at concrete levels -> monomorphise on demand
         if _ENV is not None and _ENV.has(e.name) \
@@ -195,8 +211,11 @@ def register_def(env, name, levels=()):
         body = E.inst_levels(d.value, d.level_params, tuple(levels))
         san = sanitize(name) + "_" + "_".join(str(level_to_nat(l)) for l in levels)
         MONO[key] = TConst(san)              # placeholder first (breaks cycles)
-        _register_mono_deps(env, name, body)
-        db_cert.DEFS[san] = to_db(body)      # to_db lazily registers nested poly defs
+        try:                                 # ...but roll it back on failure, so a
+            _register_mono_deps(env, name, body)         # partial registration can't
+            db_cert.DEFS[san] = to_db(body)  # poison later obligations with a body-
+        except Exception:                    # less const (each oblig fails on its own
+            MONO.pop(key, None); db_cert.DEFS.pop(san, None); raise   # true reason)
         return MONO[key]
 
     if name in CONST_MAP:                     # monomorphic
@@ -204,6 +223,144 @@ def register_def(env, name, levels=()):
     body = d.value
     san = sanitize(name)
     CONST_MAP[name] = TConst(san)            # placeholder first (so to_db maps name -> san)
-    _register_mono_deps(env, name, body)
-    db_cert.DEFS[san] = to_db(body)
+    try:                                     # atomic: roll back on failure (see poly path)
+        _register_mono_deps(env, name, body)
+        db_cert.DEFS[san] = to_db(body)
+    except Exception:
+        CONST_MAP.pop(name, None); db_cert.DEFS.pop(san, None); raise
     return CONST_MAP[name]
+
+
+# ---------------- auto-bridge user inductives (classes / structures) ----------
+# A `class`/`structure` desugars to a parametric single-constructor Inductive; an
+# `inductive` to a multi-ctor one.  Rather than hand-write a db.mm1 block per
+# type (as for Nat/Bool/List/Eq/Vec), derive the induct.py spec straight from the
+# kernel's Inductive/Constructor/Recursor decls, monomorphised at the use-site
+# levels, and let induct.generate emit the stock-MM0 axioms + register them.  The
+# projection and instance are ordinary Definitions and ride the delta path above.
+def _peel(e, n):
+    bs = []
+    for _ in range(n):
+        if not isinstance(e, E.Pi):
+            raise Unsupported("expected Pi while peeling an inductive telescope")
+        bs.append((e.binder, e.dom)); e = e.body
+    return bs, e
+
+
+def _spine(e):
+    args = []
+    while isinstance(e, E.App):
+        args.append(e.arg); e = e.fn
+    args.reverse()
+    return e, args
+
+
+def _db_name_of(name):
+    """db_cert const NAME for a base const appearing in an inductive's field /
+    index types.  Only already-bridged base consts are admissible here; anything
+    else raises (honest), so we never silently mistranslate a field type."""
+    if name in CONST_MAP:
+        return CONST_MAP[name].name
+    raise Unsupported(f"const {name!r} in an inductive field/index type")
+
+
+def _expr_to_N(e, stack, iname):
+    """kernel Expr (closed over `stack`, a list of binder names innermost-last)
+    -> an induct.N named term, for use in an induct.py inductive spec."""
+    if isinstance(e, E.Sort):
+        return induct.NSort(level_to_str(e.level))
+    if isinstance(e, E.BVar):
+        if e.idx >= len(stack):
+            raise Unsupported(f"free BVar {e.idx} in an inductive type")
+        return induct.NVar(stack[len(stack) - 1 - e.idx])
+    if isinstance(e, E.Pi):
+        bn = e.binder or "_"
+        return induct.NPi(bn, _expr_to_N(e.dom, stack, iname),
+                          _expr_to_N(e.body, stack + [bn], iname))
+    if isinstance(e, E.App):
+        return induct.NApp(_expr_to_N(e.fn, stack, iname),
+                           _expr_to_N(e.arg, stack, iname))
+    if isinstance(e, E.Const):
+        return induct.NConst(_db_name_of(e.name))
+    raise Unsupported(f"inductive type node {type(e).__name__}")
+
+
+def register_inductive(env, iname, levels):
+    """Derive + emit + register a kernel Inductive (monomorphised at `levels`).
+    Idempotent.  Covers parametric inductives whose constructor fields are
+    non-recursive (records: classes/structures like Add/Mul/Pair -- the dominant
+    skip cluster) and, in general, the recursive/indexed shapes induct.py
+    supports, provided field/index types stay within the bridged base."""
+    ind = env.get(iname)
+    if type(ind).__name__ != "Inductive":
+        raise Unsupported(f"{iname!r} is not an Inductive")
+    tag = "_".join(str(level_to_nat(l)) for l in levels)
+    if (iname, tag) in _IND_REG:
+        return
+    lp = ind.level_params
+    inst = (lambda e: E.inst_levels(e, lp, tuple(levels))) if lp else (lambda e: e)
+    P, X = ind.num_params, ind.num_indices
+    san = lambda nm: sanitize(nm) + ("_" + tag if tag else "")
+
+    tbinders, tbody = _peel(inst(ind.type_), P + X)
+    pnames = [b[0] or f"p{i}" for i, b in enumerate(tbinders[:P])]
+    xnames = [b[0] or f"x{i}" for i, b in enumerate(tbinders[P:])]
+    stack, Nparams, Nindices = [], [], []
+    for nm, (_bn, dom) in zip(pnames, tbinders[:P]):
+        Nparams.append((nm, _expr_to_N(dom, stack, iname))); stack.append(nm)
+    for nm, (_bn, dom) in zip(xnames, tbinders[P:]):
+        Nindices.append((nm, _expr_to_N(dom, stack, iname))); stack.append(nm)
+    if not isinstance(tbody, E.Sort):
+        raise Unsupported(f"{iname}: inductive result is not a Sort")
+    level = level_to_str(tbody.level)
+
+    Nctors, cmap = [], {}
+    for cn in ind.constructor_names:
+        c = env.get(cn)
+        cb, cbody = _peel(inst(c.type_), P + c.num_fields)
+        fstack, flds = list(pnames), []
+        for fi, (_bn, dom) in enumerate(cb[P:]):
+            fname = _bn or f"f{fi}"
+            h, hargs = _spine(dom)
+            if isinstance(h, E.Const) and h.name == iname:           # recursive field
+                rivs = [_expr_to_N(a, fstack, iname) for a in hargs[P:]]
+                flds.append(induct.Fld(rec=True, name=fname,
+                                       rec_index_vals=tuple(rivs)))
+            else:
+                flds.append(induct.Fld(rec=False, name=fname,
+                                       ty=_expr_to_N(dom, fstack, iname)))
+            fstack.append(fname)
+        _h, cargs = _spine(cbody)
+        ivs = [_expr_to_N(a, fstack, iname) for a in cargs[P:]]       # output indices
+        gcn = san(cn); cmap[cn] = gcn
+        Nctors.append(induct.Ctor(gcn, tuple(flds), index_vals=tuple(ivs)))
+
+    spec = induct.Inductive(san(iname), level, Nctors, san(ind.recursor_name),
+                            params=tuple(Nparams), indices=tuple(Nindices))
+    IND_EMITTED.append(induct.generate(spec))
+    _IND_REG.add((iname, tag))
+    IND_CONST[(iname, tag)] = TConst(san(iname))
+    IND_CONST[(ind.recursor_name, tag)] = TConst(san(ind.recursor_name))
+    for kn, gcn in cmap.items():
+        IND_CONST[(kn, tag)] = TConst(gcn)
+
+
+def _try_inductive_const(name, levels):
+    """If `name` is the tycon / a constructor / the recursor of a kernel
+    Inductive, ensure that inductive is registered (at the *type's* levels) and
+    return this const's db_cert TConst.  Else None."""
+    if _ENV is None or not _ENV.has(name):
+        return None
+    d = _ENV.get(name); kind = type(d).__name__
+    if kind == "Inductive":
+        iname, tlevels = name, levels
+    elif kind == "Constructor":
+        iname, tlevels = d.inductive, levels
+    elif kind == "Recursor":
+        iname = d.inductive
+        tlevels = levels[:len(_ENV.get(iname).level_params)]
+    else:
+        return None
+    register_inductive(_ENV, iname, tlevels)
+    tag = "_".join(str(level_to_nat(l)) for l in tlevels)
+    return IND_CONST.get((name, tag))
