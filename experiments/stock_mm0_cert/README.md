@@ -418,12 +418,12 @@ sort conversion.  `run_levels.py` certifies (mm0-rs + mm0-c both rc=0):
 
 | level equation | result | proof nodes |
 |---|---|---|
-| `max 0 1`             | 1 | 5  |
-| `max 1 1`             | 1 | 9  |
-| `max 2 3` / `max 3 2` | 3 | 15 / 17 |
-| `imax 2 0` (impredicative) | 0 | 8 |
-| `imax 2 3`            | 3 | 20 |
-| `max 1 (max 0 2)`     | 2 | 15 |
+| `max 0 1`             | 1 | 11 |
+| `max 1 1`             | 1 | 15 |
+| `max 2 3` / `max 3 2` | 3 | 23 / 23 |
+| `imax 2 0` (impredicative) | 0 | 11 |
+| `imax 2 3`            | 3 | 25 |
+| `max 1 (max 0 2)`     | 2 | 21 |
 | `max u u = u` (open, parametric) | u | via `leveq_maxid` |
 
 Closed levels (the bridge's current scope) normalise to numerals; open/param
