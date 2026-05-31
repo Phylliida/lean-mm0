@@ -374,7 +374,7 @@ Vec A (succ n)` the recursive tail sits at index `n` while the ctor outputs
 (induct.py's `Fld.rec_index_vals`).  The prelude matched `induct.VEC` exactly
 (ctor order, `Vec.cons` fields `[n,a,tail]`, `Vec.rec` arg order), so the
 bridge stayed structural.  `vlength [0]/[0,0]/[0,0,0] = 1/2/3` →
-**917 / 1797 / 2837 proof nodes, mm0-rs + mm0-c both rc=0**, faithfulness-guarded.
+**1551 / 2504 / 3569 proof nodes, mm0-rs + mm0-c both rc=0**, faithfulness-guarded.
 
 With Vec the bridge spans the **entire inductive spectrum**: simple-recursive
 (Nat), enumeration (Bool), parametric (List), indexed (Eq), and
