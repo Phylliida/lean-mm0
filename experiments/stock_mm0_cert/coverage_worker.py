@@ -5,11 +5,12 @@ Run as a subprocess (one fresh Python per file) so bridge/db_cert globals
 (CONST_MAP / MONO / DEFS / TYCON / ...) reset between files and a crash on one
 file can't poison the sweep.  Usage:  python3 coverage_worker.py <file.lean>
 
-Auto-detects obligations: any elaborated decl whose type is `Eq Nat lhs rhs`
-over closed Nat.  Registers the defs each side uses (mono + poly via the bridge),
-bridges lhs, certifies `deq cnil lhs rhs`.  Out-of-fragment / non-closed / error
-cases are caught per-obligation and counted as skips.  All Bool/List/Eq/Vec
-inductive blocks are emitted up front so cross-inductive obligations work.
+Auto-detects obligations: any elaborated decl whose type is `Eq A lhs rhs` for
+ANY type A (Nat, Bool, List Nat, Vec, ...), not just Nat.  Registers the defs
+each side uses (mono + poly via the bridge), bridges both sides, certifies
+`deq cnil lhs rhs` by conversion.  Out-of-fragment / non-closed / error cases are
+caught per-obligation and counted as skips.  All Bool/List/Eq/Vec inductive
+blocks are emitted up front so cross-inductive obligations work.
 
 Prints exactly one line:
   RESULT <file> elaborated=<n> obligs=<n> certified=<n> skipped=<n> \
@@ -70,12 +71,18 @@ def kernel_nf(K, e, ctx=None):
         return E.Lam(e.binder, kernel_nf(K, e.dom, ctx), e.body)
     return e
 
-def eq_over_nat(ty):
+def eq_obligation(ty):
+    """`Eq A lhs rhs` for ANY type A -> (A, lhs, rhs); else None.
+
+    Not just `Eq Nat`: the certifier below is type-agnostic (it bridges and
+    conversion-normalises the two sides), so whether an obligation certifies
+    depends only on whether its sides land in a bridged fragment -- which the
+    per-obligation try/except (and the sweep's both-checkers invariant) decide,
+    not a hard-wired type filter here.  Counting an out-of-fragment Eq as an
+    obligation-that-skipped is the honest accounting."""
     head, args = spine(ty)
     if isinstance(head, E.Const) and head.name == "Eq" and len(args) == 3:
-        A = args[0]
-        if isinstance(A, E.Const) and A.name == "Nat":
-            return args[1], args[2]
+        return args[0], args[1], args[2]
     return None
 
 
@@ -105,10 +112,10 @@ def main():
         except Exception:
             continue
         ty = getattr(d, "type_", None)
-        sides = eq_over_nat(ty) if ty is not None else None
+        sides = eq_obligation(ty) if ty is not None else None
         if sides is None:
             continue                          # not an obligation; don't count
-        lhs, rhs = sides
+        A, lhs, rhs = sides
         try:
             # ORACLE: the real kernel must agree both sides convert (same normal
             # form).  This is the de-refl obligation Eq.refl was discharging.
