@@ -936,95 +936,59 @@ generation.
 
 ### Status / honest scope
 
-The arc answers the question **yes, for CIC's core**: βιζ, typing, conversion,
-and every inductive family (parametric, indexed, recursive+indexed) certify
-out of the trusted base and check under the 815-line C kernel.
+The arc answers the original question **yes, for CIC's core**, and now reaches
+real source.  What works (each with a runnable demo under
+`experiments/stock_mm0_cert/`, every certificate checked by **both** mm0-rs and
+the 815-line **mm0-c**, and faithfulness-guarded by cross-checking the `db_cert`
+normal form against `src/kernel.py`'s own whnf):
 
-**Kernel-integration spike (landed; commits `eb129c9` + `a426cf3`).**  The
-first genuine connection from the *real* kernel to the stock checker — before
-this, every certificate was a hand-built `db_cert` demo term.  `bridge.py`
-translates a real `src/expr.py` term (already de Bruijn) into the `db_cert`
-AST for the **closed Nat fragment**, mapping `Nat`/`Nat.zero`/`Nat.succ`/
-`Nat.rec` onto `db_cert`'s singleton `tnat`/`tzero`/`tsucc`/`trec` (identity
-matters — `db_cert.whnf`'s Nat path tests `head is TREC`); anything outside the
-fragment raises `Unsupported` on purpose.  `bridge_demo.py` builds an actual
-prelude `Nat.rec` term (`add 2 2`), bridges it, certifies the reduction, and
-**both mm0-rs and mm0-c accept it** — with a faithfulness guard that
-cross-checks the `db_cert` normal form against `src/kernel.py`'s own whnf.
-Verified: `add 2 2 = 4`, kernel-nf and bridge-nf agree, **499 proof nodes,
-13960-byte cert, mm0-rs + mm0-c both rc=0**.
+- **The whole inductive spectrum** — Nat, Bool, parametric List, indexed Eq (J
+  eliminator), recursive-indexed Vec — via the certifier (`db_cert.py`) and the
+  inductive generator (`induct.py`).
+- **The kernel bridge** (`bridge.py`): translates a real `src/expr.py` term into
+  the `db_cert` AST.  Covers β, ι, conversion, and:
+  - **δ** (definitional unfolding) — a CIC `def d := body` is emitted as a
+    stock-MM0 `def d: expr = $ body $;`, so δ rides mm0's **own** native
+    def-unfold and adds **no trusted axiom** (`register_def` / `gen_def_block`).
+  - **universe-polymorphic defs** by *monomorphisation* — `register_def(env,
+    name, levels)` instantiates the body at concrete use-site levels
+    (`inst_levels`) into a closed def; `to_db` resolves `Const(name, levels)`
+    lazily.  (Level-*generic* statements, quantified over `u`, would need level
+    variables in `db.mm1` — still open.)
+  - **level equations** — a `leveq` semilattice-laws block in `db.mm1` +
+    `deq_sort`, so `Sort (max 0 1) ≡ Sort 1` etc. certify.  (This *did* add ~13
+    trusted axioms, the universe spec — unlike δ, not free.)
+  - **nested recursor majors** — the Nat-ι branch normalises the major before
+    firing succ-ι, so a *computed* major (`Nat.add (Nat.add ..) ..`) reduces.
+- **The capstone**: a real `examples/*.lean` driven through the *actual* pipeline
+  (`src.lean_parser.elaborate` = parser→elaborator→kernel), whose `de-refl`
+  obligations (`Eq Nat a b` goals holding by computation — what `Eq.refl` / `by
+  rfl` discharge) are certified by stock mm0-c.  These are certified by
+  **conversion** (`prove_conv` normalises both sides), which is what `Eq.refl`
+  actually proves — not by value equality.
 
-**Bridge widened to parametric List (this session; `bridge_list_demo.py`).**
-`bridge.py` now also maps `List`/`List.nil`/`List.cons`/`List.rec` onto the
-`induct.generate(LIST)` block's `tlist`/`pnil`/`pcons`/`prec`.  The translation
-stays purely structural: the prelude already passes the type parameter `A` as
-an ordinary App arg (`List.cons.{u} A …`, `List.rec.{u} A …`), which is exactly
-`db_cert`'s param-as-arg convention, so `to_db` just drops the universe level
-and keeps the App spine.  Real `List.rec` `length`-terms over `List Nat`
-certify and check: **`length [0]=1` / `[0,0]=2` / `[0,0,0]=3` → 725 / 1165 /
-1639 proof nodes, mm0-rs + mm0-c both rc=0**, faithfulness-guarded against the
-real kernel.  The `[0,0]=2` cert is **1165 nodes — identical to the hand-built
-`run_induct.py` List demo**, cross-validating that the bridged real-prelude
-term and the hand-authored `db_cert` term are the very same proof.  (Earlier
-note correction: the real prelude *does* give `Bool` a genuine `Bool.rec`
-recursor — a probe that said otherwise had crashed on a `type_` attribute typo.
-Bool now bridges too — the prelude orders Bool `false | true`, so
-`bridge_bool_demo.py` registers a prelude-ordered Bool spec (`induct.BOOL` is
-the opposite order): `not true=false` / `not false=true` / `not (not true)=true`
-→ 76 / 76 / 155 proof nodes, mm0-rs + mm0-c both rc=0.)
+**Still open / honest limits.**  The bridge targets *closed* `Eq Nat`
+obligations.  It does not yet cover: proofs with free variables (induction
+steps, abstract lemmas), obligations over types other than `Eq Nat`, mutual
+inductives, level-generic statements, or replacing `src/emitter.py`'s `de-refl`
+shortcut in the *production* pipeline.  So this remains a **parallel
+proof-of-concept** that certifies real obligations from real elaborated source —
+not the production trusted base.  (Moving βιζ + shift/subst1 out of the
+production trusted base needs that last wiring step.)
 
-Still open (experiment README's roadmap):
-- the bridge now spans the **whole inductive spectrum** — Nat, Bool,
-  parametric `List`, indexed `Eq` (J), and recursive-indexed `Vec`,
-- level equations — **closed levels done** (`run_levels.py`): a `leveq` semilattice-laws block in db.mm1 + a db_cert normalizer certify universe `max`/`imax` equations (`max 2 3=3`, `imax 2 0=0` impredicative, ...) through mm0-rs + mm0-c, via `deq_sort: leveq a b → deq g (esort a)(esort b)`; open/param levels and mutual inductives remain,
-- δ (definitional unfolding) — **done**: a CIC `def d := body` becomes a stock-MM0 `def d: expr = $ body $;`, so δ rides mm0's **native def-unfold with no trusted axiom** (the cert's δ step is free — `deq cnil d body` is `deq_refl`).  `Nat.add`/`Nat.pred` certify through δ+β+ι (`bridge_delta_demo.py`),
-- drive a whole `examples/*.lean` through parser→elaborator→kernel→bridge and
-  replace `src/emitter.py`'s `de-refl` shortcut with generated certificates.
-  Only that full wiring would move the βιζ + shift/subst1 evaluator out of the
-  *production* trusted base; today this is a parallel proof-of-concept that
-  certifies single real terms, not the example suite.
+**Reproduce — and how the numbers are sourced.**  This section deliberately
+states *capabilities, not counts*: figures (proof-node sizes, how many
+obligations certify) shift as the bridge grows, so they live in script output,
+not here.  From `experiments/stock_mm0_cert/` (build the checkers first; see the
+experiment `README.md`):
 
-Reproduce: from `experiments/stock_mm0_cert/`, run `python3 run_db.py`,
-`run_db_typed.py`, `run_induct.py`, `run_levels.py`, `bench.py`, `bridge_demo.py`,
-`bridge_list_demo.py`, `bridge_bool_demo.py`, `bridge_eq_demo.py`, `bridge_vec_demo.py`, `bridge_delta_demo.py` (each prints results + both checkers' verdicts).  Build
-the checkers first (see the
-experiment README).
-
-
-## Capstone spike (real example -> stock mm0-c)
-
-`experiments/stock_mm0_cert/capstone_demo.py` drives a real `examples/math.lean`
-through the actual parser->elaborator->kernel, then discharges its `de-refl`
-obligations with stock mm0-c via the bridge -- no `emitter.py`, no
-`mm0_verify.py`.  3 of 10 elaborated decls (the closed-Nat computation-by-refl
-`Nat.add 5 0 / 0 7 / 5 3` = 5/7/8) certify at 214 / 1474 / 814 proof nodes,
-mm0-rs + mm0-c both rc=0, faithfulness-guarded against `src/kernel.py`.  The
-nested `Nat.add 7 (Nat.add 8 9)` and universe-polymorphic / Bool / tactic decls
-are skipped; the full βιζ-evaluator retirement (every decl, the whole suite)
-remains.
-
-
-## Universe-polymorphic defs (monomorphisation) -- `bridge_poly_demo.py`
-
-Poly defs bridge by MONOMORPHISATION: `bridge.register_def(env, name, levels)`
-instantiates the body at concrete use-site levels via `inst_levels`, producing a
-closed db_cert def (`id_poly.{1}` -> `id_poly_1`); `to_db` resolves
-`Const(name, levels)` to its monomorphisation lazily.  δ unfolds it through mm0's
-native def-unfold -- still no trusted axiom.  `examples/no_levels.lean` (universe
-inference, no `.{u}` written) certifies 3 de-refl obligations through stock
-mm0-c: `id_poly.{1} Nat 3 = 3` (18 nodes), `const_fn.{1,1} Nat Bool 7
-Bool.true = 7` (66; cross-inductive, needs the Bool block), and
-`compose3.{1,1,1} … 5 = 7` (145).  mm0-rs + mm0-c both rc=0,
-faithfulness-guarded.  Level-generic statements (quantified over `u`) would need
-level variables in db.mm1 -- future work.
-
-## Nested recursor majors (general fix)
-
-The hard-wired Nat-iota branch in db_cert.whnf now NORMALISES the recursor's
-major premise (prove_norm) instead of weak-head reducing it.  A *computed*
-major (e.g. Nat.add 8 9 inside Nat.add 7 (Nat.add 8 9)) only weak-head-reduces
-to `succ K` with K an unreduced recursor app, but the succ-iota gate needs a
-literal numeral; full normalisation gives one.  `Nat.add 7 (Nat.add 8 9) = 24`
-now certifies (6726 nodes), lifting the capstone from 3 to 4 of math.lean's 10
-decls, mm0-rs + mm0-c both rc=0; run_induct / delta / poly unaffected (the
-general-inductive branch still uses whnf, which suffices there).
+- per-feature demos, each prints its own results + both checkers' verdicts:
+  `run_db.py`, `run_db_typed.py`, `run_induct.py`, `bench.py`,
+  `bridge_demo.py` (Nat), `bridge_list_demo.py`, `bridge_bool_demo.py`,
+  `bridge_eq_demo.py`, `bridge_vec_demo.py`, `bridge_delta_demo.py` (δ),
+  `bridge_poly_demo.py` (universe-poly), `run_levels.py`, `capstone_demo.py`.
+- whole-suite coverage: `python3 coverage_sweep.py` — runs `coverage_worker.py`
+  over every `examples/*.lean` (subprocess per file), prints a fresh per-file
+  table + headline, and **asserts** the invariant that every file with a
+  certified obligation passes both mm0-rs and mm0-c (exits non-zero otherwise).
+  `coverage.md` describes the method; run the sweep for the current spread.
