@@ -17,7 +17,7 @@ Prints exactly one line:
          rs_rc=<n> cc_rc=<n> faithful=<bool> nodes=<csv> reasons=<csv>
 (rs_rc/cc_rc are -2 when there were 0 certified obligations -> nothing to check.)
 """
-import os, sys, subprocess, traceback
+import os, sys, re, subprocess, traceback
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
@@ -86,6 +86,17 @@ def eq_obligation(ty):
     return None
 
 
+def _reason(prefix, ex):
+    """Compact, csv-safe skip tag carrying WHAT failed, not just the class:
+    prefer a quoted name from the message (e.g. unsup:Add.add), else its first
+    word (e.g. ValueError:stuck).  Lets the sweep point at its own next targets
+    instead of opaque exception names."""
+    m = re.search(r"'([^']+)'", str(ex))
+    tok = m.group(1) if m else (str(ex).split(":")[0].split() or [""])[0]
+    tok = re.sub(r"[^A-Za-z0-9_.]+", "_", tok)[:32].strip("_")
+    return prefix + (":" + tok if tok else "")
+
+
 def main():
     fname = sys.argv[1]
     base = os.path.basename(fname)
@@ -140,9 +151,9 @@ def main():
             certified.append((name, val, db_cert.pp(dl), db_cert.pp(dr), conv,
                               db_cert.proof_nodes(conv)))
         except bridge.Unsupported as ex:
-            skipped.append("unsup")
+            skipped.append(_reason("unsup", ex))
         except Exception as ex:
-            skipped.append(type(ex).__name__)
+            skipped.append(_reason(type(ex).__name__, ex))
 
     obligs = len(certified) + len(skipped)
     nodes_csv = ",".join(str(n) for *_r, n in certified)

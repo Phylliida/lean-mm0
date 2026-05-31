@@ -5,7 +5,7 @@ Deliberately prints rather than bakes numbers into a doc: the figures shift as
 the bridge grows, so the source of truth is *running this*, not a stale table.
 Usage:  python3 coverage_sweep.py
 """
-import os, re, sys, subprocess
+import os, re, sys, subprocess, collections
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
@@ -55,6 +55,20 @@ def main():
         name = r.split()[1]
         print("| `%s` | %d | %d | %s | %s |" % (name, gi(r, "obligs"), gi(r, "certified"),
                                                 mark(gi(r, "rs_rc")), mark(gi(r, "cc_rc"))))
+
+    # aggregate the per-file skip tags so the sweep names its own next targets
+    reasons = collections.Counter()
+    for r in ok:
+        m = re.search(r" reasons=(\S+)", r)
+        if not m or m.group(1) == "-":
+            continue
+        for tag in m.group(1).split(","):
+            if tag and tag != "-":
+                reasons[tag] += 1
+    if reasons:
+        print("\n## Top skip reasons (files blocked, by construct)\n")
+        for tag, c in reasons.most_common():
+            print("- `%s` — %d file(s)" % (tag, c))
 
     print("\n## Headline (regenerated this run)\n")
     print(f"- {len(rows)} example files swept; {len(ok)} elaborate here, {len(err)} do not")
