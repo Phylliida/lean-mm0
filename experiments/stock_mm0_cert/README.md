@@ -284,7 +284,7 @@ Reading it honestly:
    cross-checking the db_cert normal form against `src/kernel.py`'s own whnf.
    Spike result: `add 2 2 = 4`, kernel-nf and bridge-nf agree, **499 proof
    nodes, 13960-byte cert, mm0-rs + mm0-c both exit 0.**  Scope is the closed
-   Nat fragment (`bridge.to_db` raises `Unsupported` on anything else, on
+   Nat fragment **plus parametric `List`** (`bridge.to_db` raises `Unsupported` on anything else, on
    purpose).  Still untouched: driving a whole `examples/*.lean` through
    parser→elaborator→kernel→bridge, and replacing `src/emitter.py`'s `de-refl`
    shortcut — that's what would move βιζ + shift/subst1 out of the *production*
@@ -322,3 +322,36 @@ Reading it honestly:
 - `bench.py` — speed benchmark (stock kernel check vs our verifier compute).
 
 Generated output (`_gen_*.mm1`) is gitignored.
+
+
+### Bridge widening: parametric List
+
+The kernel-integration bridge (`bridge.py`) now also covers the prelude's
+*parametric* `List`.  It maps `List` / `List.nil` / `List.cons` / `List.rec`
+onto the `induct.generate(LIST)` block's `tlist` / `pnil` / `pcons` / `prec`.
+The translation is purely structural: the real prelude already passes the type
+parameter `A` as an ordinary application argument (`List.cons.{u} A …`,
+`List.rec.{u} A …`), which is exactly `db_cert`'s param-as-arg convention, so
+`to_db` simply drops the universe level and keeps the App spine — no new code
+path beyond the name map.
+
+`bridge_list_demo.py` builds real `List.rec` `length`-terms over `List Nat`,
+certifies each reduction, and checks the certificate with **both** stock
+checkers, with a faithfulness guard that cross-checks the `db_cert` normal form
+against the real `src/kernel.py` whnf:
+
+| computation | proof nodes | mm0-rs | mm0-c |
+|---|---|---|---|
+| `length [0] = 1`       | 725  | rc=0 | rc=0 |
+| `length [0,0] = 2`     | 1165 | rc=0 | rc=0 |
+| `length [0,0,0] = 3`   | 1639 | rc=0 | rc=0 |
+
+(List block 1792 B · combined `.mm1` 45422 B · `.mmb` 33544 B.)  The
+`length [0,0] = 2` certificate is **1165 nodes — identical to the hand-built
+`run_induct.py` List demo**, cross-validating that the bridged real-prelude
+term and the hand-authored `db_cert` term are the same proof.
+
+Note: the real prelude *does* give `Bool` a genuine `Bool.rec` recursor, so Bool
+is bridgeable as well — pending only a constructor-order check between the
+prelude (`Bool` may be `false | true`) and the `induct.BOOL` spec
+(`btrue | bfalse`), since a recursor selects its minor by constructor position.

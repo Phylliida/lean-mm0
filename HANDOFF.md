@@ -954,8 +954,26 @@ cross-checks the `db_cert` normal form against `src/kernel.py`'s own whnf.
 Verified: `add 2 2 = 4`, kernel-nf and bridge-nf agree, **499 proof nodes,
 13960-byte cert, mm0-rs + mm0-c both rc=0**.
 
+**Bridge widened to parametric List (this session; `bridge_list_demo.py`).**
+`bridge.py` now also maps `List`/`List.nil`/`List.cons`/`List.rec` onto the
+`induct.generate(LIST)` block's `tlist`/`pnil`/`pcons`/`prec`.  The translation
+stays purely structural: the prelude already passes the type parameter `A` as
+an ordinary App arg (`List.cons.{u} A …`, `List.rec.{u} A …`), which is exactly
+`db_cert`'s param-as-arg convention, so `to_db` just drops the universe level
+and keeps the App spine.  Real `List.rec` `length`-terms over `List Nat`
+certify and check: **`length [0]=1` / `[0,0]=2` / `[0,0,0]=3` → 725 / 1165 /
+1639 proof nodes, mm0-rs + mm0-c both rc=0**, faithfulness-guarded against the
+real kernel.  The `[0,0]=2` cert is **1165 nodes — identical to the hand-built
+`run_induct.py` List demo**, cross-validating that the bridged real-prelude
+term and the hand-authored `db_cert` term are the very same proof.  (Earlier
+note correction: the real prelude *does* give `Bool` a genuine `Bool.rec`
+recursor — a probe that said otherwise had crashed on a `type_` attribute typo.
+Bool is bridgeable too, pending only a constructor-order check between the
+prelude and the `induct.BOOL` spec.)
+
 Still open (experiment README's roadmap):
-- extend the bridge past Nat (Bool/List via `induct.py`, then indexed),
+- extend the bridge to **Bool** (recursor exists; verify ctor order) and the
+  **indexed** families (`Eq` / `Vec`) — parametric `List` now lands,
 - level equations (`lmax`/`limax` laws) and mutual inductives,
 - δ (statement-level `def` unfold),
 - drive a whole `examples/*.lean` through parser→elaborator→kernel→bridge and
@@ -965,6 +983,7 @@ Still open (experiment README's roadmap):
   certifies single real terms, not the example suite.
 
 Reproduce: from `experiments/stock_mm0_cert/`, run `python3 run_db.py`,
-`run_db_typed.py`, `run_induct.py`, `bench.py`, `bridge_demo.py` (each prints
-results + both checkers' verdicts).  Build the checkers first (see the
+`run_db_typed.py`, `run_induct.py`, `bench.py`, `bridge_demo.py`,
+`bridge_list_demo.py` (each prints results + both checkers' verdicts).  Build
+the checkers first (see the
 experiment README).

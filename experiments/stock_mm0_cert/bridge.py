@@ -32,15 +32,34 @@ class Unsupported(Exception):
     pass
 
 
-# Map prelude Const names -> db.mm1 atomic constants (Nat fragment only).
-# Map to db_cert's *singleton* Const objects, not fresh ones: db_cert.whnf's
-# hard-wired Nat reduction path tests identity (`head is TREC`, `mj.f is TSUCC`,
-# ...), so a fresh Const("trec") would never fire the recursor rule.
+# Map prelude Const names -> db.mm1 / generated-block constants.
+#
+# Nat is special: db_cert.whnf's hard-wired Nat reduction path tests identity
+# (`head is TREC`, `mj.f is TSUCC`, ...), so the four Nat names MUST map to
+# db_cert's *singleton* Const objects -- a fresh Const("trec") would never fire
+# the recursor rule.
+#
+# List (and any inductive emitted by induct.generate) goes through the GENERAL
+# iota path, which matches by *name* against db_cert's registry (REC_OF /
+# CTOR_IX), so fresh Const(name) objects are fine -- they just have to use the
+# exact names the induct.py LIST spec registers (tlist / pnil / pcons / prec).
+# The prelude term carries the universe level on the const (List.cons.{u}) and
+# the element type as the first App arg (List.cons Nat ...); to_db drops the
+# level and keeps the App args, which is precisely db_cert's param-as-arg
+# convention.  So no structural change is needed -- only the name mapping below.
 CONST_MAP = {
-    "Nat":      db_cert.TNAT,
-    "Nat.zero": db_cert.TZERO,
-    "Nat.succ": db_cert.TSUCC,
-    "Nat.rec":  db_cert.TREC,
+    # Nat fragment -- identity-mapped singletons (hard-wired whnf path)
+    "Nat":       db_cert.TNAT,
+    "Nat.zero":  db_cert.TZERO,
+    "Nat.succ":  db_cert.TSUCC,
+    "Nat.rec":   db_cert.TREC,
+    # List fragment -- name-matched against the induct.generate(LIST) block;
+    # names MUST equal induct.LIST's (tycon "tlist", ctors "pnil"/"pcons",
+    # recursor "prec") or the general iota path never fires.
+    "List":      TConst("tlist"),
+    "List.nil":  TConst("pnil"),
+    "List.cons": TConst("pcons"),
+    "List.rec":  TConst("prec"),
 }
 
 
