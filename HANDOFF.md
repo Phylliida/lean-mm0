@@ -974,8 +974,8 @@ the opposite order): `not true=false` / `not false=true` / `not (not true)=true`
 → 76 / 76 / 155 proof nodes, mm0-rs + mm0-c both rc=0.)
 
 Still open (experiment README's roadmap):
-- extend the bridge to **`Vec`** (recursive *and* indexed) — Nat, Bool,
-  parametric `List`, and the indexed `Eq` (J eliminator) now land,
+- the bridge now spans the **whole inductive spectrum** — Nat, Bool,
+  parametric `List`, indexed `Eq` (J), and recursive-indexed `Vec`,
 - level equations (`lmax`/`limax` laws) and mutual inductives,
 - δ (statement-level `def` unfold),
 - drive a whole `examples/*.lean` through parser→elaborator→kernel→bridge and

@@ -366,3 +366,16 @@ eliminator (2 params `A a`, 1 index `b`, single ctor `Eq.refl`).  The prelude's
 structural.  The canonical J computation `Eq.rec C base refl = base`:
 `J 0/1/2 = 0/1/2` → **338 / 341 / 344 proof nodes, mm0-rs + mm0-c both rc=0**,
 faithfulness-guarded against the real kernel.
+
+`bridge_vec_demo.py` completes the spectrum with **`Vec`** -- length-indexed
+vectors, **recursive *and* indexed**.  In `Vec.cons : (n)(a:A)(Vec A n) ->
+Vec A (succ n)` the recursive tail sits at index `n` while the ctor outputs
+`succ n`, so the recursor's IH uses the field's index, not the output's
+(induct.py's `Fld.rec_index_vals`).  The prelude matched `induct.VEC` exactly
+(ctor order, `Vec.cons` fields `[n,a,tail]`, `Vec.rec` arg order), so the
+bridge stayed structural.  `vlength [0]/[0,0]/[0,0,0] = 1/2/3` →
+**917 / 1797 / 2837 proof nodes, mm0-rs + mm0-c both rc=0**, faithfulness-guarded.
+
+With Vec the bridge spans the **entire inductive spectrum**: simple-recursive
+(Nat), enumeration (Bool), parametric (List), indexed (Eq), and
+recursive-indexed (Vec) -- every shape, real kernel term → 815-line C kernel.

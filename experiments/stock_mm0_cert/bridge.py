@@ -3,8 +3,8 @@ db_cert de-Bruijn AST, so a genuine kernel term can be certified through
 stock mm0-c -- instead of the hand-built demo terms used elsewhere here.
 
 Scope (deliberately tiny -- this is one end-to-end data point, not the whole
-pipeline): the closed Nat fragment, Bool, parametric List, and the indexed type Eq.  Supported `Expr` nodes: Sort, BVar, App,
-Lam, Pi, and Const for {Nat,Nat.zero,Nat.succ,Nat.rec}, {Bool,Bool.false,Bool.true,Bool.rec}, {List,List.nil,List.cons,List.rec}, and {Eq,Eq.refl,Eq.rec}.  Everything else
+pipeline): the closed Nat fragment, Bool, parametric List, the indexed type Eq, and the recursive-indexed Vec.  Supported `Expr` nodes: Sort, BVar, App,
+Lam, Pi, and Const for {Nat,Nat.zero,Nat.succ,Nat.rec}, {Bool,Bool.false,Bool.true,Bool.rec}, {List,List.nil,List.cons,List.rec}, {Eq,Eq.refl,Eq.rec}, and {Vec,Vec.nil,Vec.cons,Vec.rec}.  Everything else
 raises Unsupported, on purpose, so we never silently mistranslate.
 
 `src/expr.py` is ALREADY de Bruijn (BVar(idx)), and Nat.rec's argument order
@@ -77,6 +77,15 @@ CONST_MAP = {
     "Eq":      TConst("teq"),
     "Eq.refl": TConst("refl_eq"),
     "Eq.rec":  TConst("eqrec"),
+    # Vec fragment -- RECURSIVE + INDEXED; names match the induct.VEC spec
+    # (tycon "tvec", ctors "vnil"/"vcons", recursor "vrec").  The prelude's
+    # ctor order [Vec.nil, Vec.cons], Vec.cons field order [n, a, tail], and
+    # Vec.rec arg order [A, C, minors, n, major] all match induct.VEC, so the
+    # bridge stays structural and the shared spec is reused as-is.
+    "Vec":      TConst("tvec"),
+    "Vec.nil":  TConst("vnil"),
+    "Vec.cons": TConst("vcons"),
+    "Vec.rec":  TConst("vrec"),
 }
 
 
