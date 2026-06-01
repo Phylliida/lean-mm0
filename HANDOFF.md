@@ -951,7 +951,13 @@ normal form against `src/kernel.py`'s own whnf):
   `Recursor`, monomorphises at use-site levels, translates field/index types with
   `_expr_to_N`, and feeds `induct.generate` — so data structures (`Pair`, `Sum`,
   `And`, `True`, `False`, …) certify with **no hand-written `db.mm1` block**.
-  Their projections and instances are ordinary `def`s and ride the δ path.
+  Their projections and instances are ordinary `def`s and ride the δ path.  Field
+  / index types may mention **defs** (inlined by `_whnf_delta`: δ-unfold + β, so
+  the def never enters the emitted block — no ordering constraint) and **other
+  user inductives** (registered via `_try_inductive_const`, whose block is emitted
+  first since this runs inside the dependent's ctor loop).  This reaches
+  `Decidable` (`isFalse`'s `h : Not p`, `Not := p → False`) and inheritance
+  structs (`SemiRing`/`Magma`, whose fields are other structures).
 - **Typeclasses / structures over `Nat`** (`arith.lean`'s `Add`/`Mul` instances,
   algebra structures, `Decidable` composition, …) — certified by **unifying** a
   recursor's bound motive level rather than converting it.  A recursor's typing
@@ -989,17 +995,19 @@ normal form against `src/kernel.py`'s own whnf):
 
 **Still open / honest limits.**  The bridge targets *closed* `Eq` obligations
 over bridged types.  It does not yet cover: proofs with free variables (induction
-steps, abstract lemmas); structure fields that mention *defs* or *other* user
-inductives (`Decidable`'s `Not p` field, inheritance structs like `SemiRing` —
-`_db_name_of`/`_expr_to_N` only resolve base consts); mutual inductives;
-**level-generic** statements (quantified over `u` — the bridge monomorphises at
-concrete use-site levels, so a *generic* `Eq` goal would need level variables in
-`db.mm1`; note this is distinct from the recursor's bound motive `u`, which *is*
-handled, by unification); indexed `Nat.le`; or replacing `src/emitter.py`'s
-`de-refl` shortcut in the *production* pipeline.  So this remains a **parallel
-proof-of-concept** that certifies real obligations from real elaborated source —
-not the production trusted base.  (Moving βιζ + shift/subst1 out of the
-production trusted base needs that last wiring step.)
+steps, abstract lemmas); mutual inductives; **level-generic** statements
+(quantified over `u` — the bridge monomorphises at concrete use-site levels, so a
+*generic* `Eq` goal would need level variables in `db.mm1`; note this is distinct
+from the recursor's bound motive `u`, which *is* handled, by unification); indexed
+`Nat.le`; obligations whose *values* contain `Eq` itself (`bool_dec_eq.lean`) —
+`CONST_MAP` hard-maps `Eq`→`teq` to the hand-written `db.mm1` block, which the
+*worker* doesn't emit (so `shf: unknown const teq`), plus a separate `leveq`
+assertion: a pre-existing `CONST_MAP`-vs-auto-registration reconciliation, not the
+field-type path; or replacing `src/emitter.py`'s `de-refl` shortcut in the
+*production* pipeline.  So this remains a **parallel proof-of-concept** that
+certifies real obligations from real elaborated source — not the production
+trusted base.  (Moving βιζ + shift/subst1 out of the production trusted base needs
+that last wiring step.)
 
 **Reproduce — and how the numbers are sourced.**  This section deliberately
 states *capabilities, not counts*: figures (proof-node sizes, how many
