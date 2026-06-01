@@ -1000,23 +1000,30 @@ steps, abstract lemmas); mutual inductives; **level-generic** statements
 *generic* `Eq` goal would need level variables in `db.mm1`; note this is distinct
 from the recursor's bound motive `u`, which *is* handled, by unification); indexed
 `Nat.le`; obligations whose *values* contain `Eq` itself (`bool_dec_eq.lean` —
-`Bool` decidable equality, which composes `brec` feeding `eqrec`).  This one was
-investigated in depth and is two-layered: (1) the hand-written `induct.EQ` spec
-declares `teq` at `Sort 1`, but the kernel `Eq` is a `Prop` (`Sort 0`), so an `Eq`
-value sitting in a `Prop`-expecting slot (`Decidable p`, `p : Prop`) clashes
-(`leveq (lS lz) lz`); (2) fixing that universe exposes a deeper wall — `eqrec`'s
-polymorphic motive level `u` survives into a *conversion* (not a clean coerce
-boundary), interleaved with unreduced redexes from the `brec`→`eqrec`
-composition.  A normalise-then-unify in `_coerce` makes the *certifier* emit
-proofs, but **mm0-rs rejects them** (`esort u` in the generated `eqrec` motive
-kind vs `(C @ x)` in the substitution — `esort != eapp`), so it's a genuine
-two-recursor-interaction problem, harder than the single arith motive-level fix —
-not a `CONST_MAP`/emission issue (an earlier note saying so was a repro artifact;
-the worker *does* emit `teq`).  Or replacing `src/emitter.py`'s `de-refl`
-shortcut in the *production* pipeline.  So this remains a **parallel proof-of-concept** that
-certifies real obligations from real elaborated source — not the production
-trusted base.  (Moving βιζ + shift/subst1 out of the production trusted base needs
-that last wiring step.)
+`Bool` decidable equality, which composes `brec` feeding `eqrec`).  This was
+investigated in depth across two layers:
+  - **Layer 1 (fixed, see `git log`):** the hand-written `induct.EQ` declared `teq`
+    at `Sort 1`, but the kernel `Eq` is a `Prop` (`Sort 0`); an `Eq` value in a
+    `Prop` slot (`Decidable p`) clashed (`leveq (lS lz) lz`).  `induct.EQ` now types
+    `teq` at `lz` (with `run_induct.py`'s reference updated to match).  Regression-
+    free; it's a prerequisite, doesn't move coverage on its own.
+  - **Layer 2 (open — root identified):** the certifier can be taught to
+    monomorphise the recursor type at `u := k` (read off the concrete motive) and
+    normalise unreduced motive codomains, which makes it *emit* proofs — but
+    **mm0-rs rejects them**, and the true root is one level deeper than the
+    certifier: `induct.py` generates `ht_<rec>` with the motive kind's codomain
+    *literally* `esort u`.  A motive whose body is a **sort-valued nested recursor**
+    (the `brec` inside bool_dec_eq's `eqrec` motive) has codomain `(brec_motive @
+    major)` — definitionally a sort but syntactically an `eapp` — and MM0 won't
+    β-reduce during unification (`esort != eapp`).  The fix lives in **`induct.py`'s
+    axiom generation** (emit the recursor typing rule so the motive codomain is a
+    *provably-a-sort* expr, not literally `esort u`), a meaningful redesign — not a
+    `CONST_MAP`/emission issue (an earlier note saying so was a repro artifact; the
+    worker *does* emit `teq`).
+Or replacing `src/emitter.py`'s `de-refl` shortcut in the *production* pipeline.
+So this remains a **parallel proof-of-concept** that certifies real obligations
+from real elaborated source — not the production trusted base.  (Moving βιζ +
+shift/subst1 out of the production trusted base needs that last wiring step.)
 
 **Reproduce — and how the numbers are sourced.**  This section deliberately
 states *capabilities, not counts*: figures (proof-node sizes, how many
