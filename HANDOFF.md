@@ -992,6 +992,18 @@ normal form against `src/kernel.py`'s own whnf):
   data-structure values, …) are certified by stock mm0-c.  These are certified by
   **conversion** (`prove_conv` normalises both sides), which is what `Eq.refl`
   actually proves — not by value equality.
+- **`Eq`-in-value obligations / sort-valued nested recursors** (`bool_dec_eq.lean`
+  — `Bool` decidable equality, `brec` feeding `eqrec`).  Two layers: (1) the hand-
+  written `induct.EQ` declared `teq` at `Sort 1`, but the kernel `Eq` is a `Prop`
+  (`Sort 0`) — fixed (`run_induct.py`'s reference updated to match).  (2) A
+  sort-valued recursor inside another recursor's motive has result type
+  `(motive @ major)` (a redex), not a literal sort, so the motive level `u` leaked
+  into the closed normaliser and mm0-rs saw `esort u =?= (motive @ major)`.  Fixed
+  **certifier-side** (no axiom redesign, contra an earlier prediction): `_coerce`'s
+  recursor gating *monomorphises* the recursor type at `u := k` read off the
+  motive's normalised codomain (`inst_level`/`_codomain_sort`); and `_prove_sort`
+  presents `ht_conv`'s well-formedness premise as a *literal* `esort` by normalising
+  a recursor-result sort.  Both checkers accept.
 
 **Still open / honest limits.**  The bridge targets *closed* `Eq` obligations
 over bridged types.  It does not yet cover: proofs with free variables (induction
@@ -999,31 +1011,11 @@ steps, abstract lemmas); mutual inductives; **level-generic** statements
 (quantified over `u` — the bridge monomorphises at concrete use-site levels, so a
 *generic* `Eq` goal would need level variables in `db.mm1`; note this is distinct
 from the recursor's bound motive `u`, which *is* handled, by unification); indexed
-`Nat.le`; obligations whose *values* contain `Eq` itself (`bool_dec_eq.lean` —
-`Bool` decidable equality, which composes `brec` feeding `eqrec`).  This was
-investigated in depth across two layers:
-  - **Layer 1 (fixed, see `git log`):** the hand-written `induct.EQ` declared `teq`
-    at `Sort 1`, but the kernel `Eq` is a `Prop` (`Sort 0`); an `Eq` value in a
-    `Prop` slot (`Decidable p`) clashed (`leveq (lS lz) lz`).  `induct.EQ` now types
-    `teq` at `lz` (with `run_induct.py`'s reference updated to match).  Regression-
-    free; it's a prerequisite, doesn't move coverage on its own.
-  - **Layer 2 (open — root identified):** the certifier can be taught to
-    monomorphise the recursor type at `u := k` (read off the concrete motive) and
-    normalise unreduced motive codomains, which makes it *emit* proofs — but
-    **mm0-rs rejects them**, and the true root is one level deeper than the
-    certifier: `induct.py` generates `ht_<rec>` with the motive kind's codomain
-    *literally* `esort u`.  A motive whose body is a **sort-valued nested recursor**
-    (the `brec` inside bool_dec_eq's `eqrec` motive) has codomain `(brec_motive @
-    major)` — definitionally a sort but syntactically an `eapp` — and MM0 won't
-    β-reduce during unification (`esort != eapp`).  The fix lives in **`induct.py`'s
-    axiom generation** (emit the recursor typing rule so the motive codomain is a
-    *provably-a-sort* expr, not literally `esort u`), a meaningful redesign — not a
-    `CONST_MAP`/emission issue (an earlier note saying so was a repro artifact; the
-    worker *does* emit `teq`).
-Or replacing `src/emitter.py`'s `de-refl` shortcut in the *production* pipeline.
-So this remains a **parallel proof-of-concept** that certifies real obligations
-from real elaborated source — not the production trusted base.  (Moving βιζ +
-shift/subst1 out of the production trusted base needs that last wiring step.)
+`Nat.le`; or replacing `src/emitter.py`'s `de-refl` shortcut in the *production*
+pipeline.  So this remains a **parallel proof-of-concept** that certifies real
+obligations from real elaborated source — not the production trusted base.
+(Moving βιζ + shift/subst1 out of the production trusted base needs that last
+wiring step.)
 
 **Reproduce — and how the numbers are sourced.**  This section deliberately
 states *capabilities, not counts*: figures (proof-node sizes, how many
