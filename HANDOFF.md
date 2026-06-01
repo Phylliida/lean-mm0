@@ -991,6 +991,14 @@ normal form against `src/kernel.py`'s own whnf):
     name tags bijective (`max 1 1` and `1` can't collide on `name_1`).  Unblocked the
     `unsup:level` cluster — `parametric_inst` (Pair projections), `notation_brackets`,
     `cases` (Sum).  No trusted-base change (db.mm1 already had `lmax`/`limax`).
+  - **`let` (ζ) + poly-def-at-head** — `to_db` ζ-inlines a CIC `let x := v in b` to
+    `b[v/x]` (db.mm1 has no `elet`; the kernel ζ-reduces identically, so it's sound
+    for a de-refl conversion).  And `bind_env` binds the kernel `Env` up front so a
+    universe-polymorphic def first met at an obligation's *head* — with no prior
+    monomorphic def to have set `_ENV` as a side effect — still resolves via the lazy
+    monomorphisation path.  Fixed an order-dependent latent bug (`demo.lean`'s
+    `id_poly.{1} 42` failed while `double_3` right after it bridged); also unblocked
+    `apply`'s `id_assn`, `mid_seq`'s `call_at_seven`, and `idx_match`'s `my_eq_symm`.
   - **nested recursor majors** — the Nat-ι branch normalises the major before
     firing succ-ι, so a *computed* major (`Nat.add (Nat.add ..) ..`) reduces.
 - **The capstone**: real `examples/*.lean` driven through the *actual* pipeline

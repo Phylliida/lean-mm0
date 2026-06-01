@@ -136,6 +136,16 @@ def level_to_nat(l) -> int:
 MONO = {}
 _ENV = None
 
+
+def bind_env(env):
+    """Bind the kernel Env so to_db's lazy poly-def path can resolve a
+    universe-polymorphic Const it first meets at the HEAD of an obligation (no
+    monomorphic def / user inductive registered yet to have set _ENV as a side
+    effect).  Fixes an order-dependent latent bug: an obligation whose only def is
+    polymorphic (e.g. `id_poly.{1} Nat 42`) used to fail with _ENV=None."""
+    global _ENV
+    _ENV = env
+
 # --- user inductives (classes / structures) auto-bridged from the kernel ---
 IND_EMITTED = []     # generated stock-MM0 blocks, in dependency (emission) order
 IND_CONST = {}       # (kernel const name, level tag) -> db_cert TConst
@@ -154,6 +164,11 @@ def to_db(e) -> object:
         return TLam(to_db(e.dom), to_db(e.body))
     if isinstance(e, E.Pi):
         return EPi(to_db(e.dom), to_db(e.body))
+    if isinstance(e, E.Let):
+        # CIC `let x := v in b` is zeta-equal to its inlining b[v/x]; db.mm1 has no
+        # `elet`, so inline.  Sound for a de-refl conversion -- the kernel
+        # zeta-reduces the same way -- and nested lets are handled by the recursion.
+        return to_db(E.subst_bvar(e.body, 0, e.value))
     if isinstance(e, E.Const):
         if e.name in CONST_MAP:
             return CONST_MAP[e.name]          # Nat -> singleton (identity); Bool/List -> named const (matched by name)

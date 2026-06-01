@@ -133,6 +133,9 @@ def main():
                   + induct.generate(induct.EQ) + "\n" + induct.generate(induct.VEC) + "\n")
         added = elaborate(open(fname).read(), env)
         K = Kernel(env)
+        bridge.bind_env(env)                  # so to_db's lazy poly-def path works
+                                              # even when an obligation's only def is
+                                              # polymorphic (no mono def to set _ENV)
     except Exception as ex:
         import traceback as _tb
         open("/tmp/elabfail_%s.txt" % base, "w").write(_tb.format_exc())
