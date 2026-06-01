@@ -999,12 +999,21 @@ steps, abstract lemmas); mutual inductives; **level-generic** statements
 (quantified over `u` — the bridge monomorphises at concrete use-site levels, so a
 *generic* `Eq` goal would need level variables in `db.mm1`; note this is distinct
 from the recursor's bound motive `u`, which *is* handled, by unification); indexed
-`Nat.le`; obligations whose *values* contain `Eq` itself (`bool_dec_eq.lean`) —
-`CONST_MAP` hard-maps `Eq`→`teq` to the hand-written `db.mm1` block, which the
-*worker* doesn't emit (so `shf: unknown const teq`), plus a separate `leveq`
-assertion: a pre-existing `CONST_MAP`-vs-auto-registration reconciliation, not the
-field-type path; or replacing `src/emitter.py`'s `de-refl` shortcut in the
-*production* pipeline.  So this remains a **parallel proof-of-concept** that
+`Nat.le`; obligations whose *values* contain `Eq` itself (`bool_dec_eq.lean` —
+`Bool` decidable equality, which composes `brec` feeding `eqrec`).  This one was
+investigated in depth and is two-layered: (1) the hand-written `induct.EQ` spec
+declares `teq` at `Sort 1`, but the kernel `Eq` is a `Prop` (`Sort 0`), so an `Eq`
+value sitting in a `Prop`-expecting slot (`Decidable p`, `p : Prop`) clashes
+(`leveq (lS lz) lz`); (2) fixing that universe exposes a deeper wall — `eqrec`'s
+polymorphic motive level `u` survives into a *conversion* (not a clean coerce
+boundary), interleaved with unreduced redexes from the `brec`→`eqrec`
+composition.  A normalise-then-unify in `_coerce` makes the *certifier* emit
+proofs, but **mm0-rs rejects them** (`esort u` in the generated `eqrec` motive
+kind vs `(C @ x)` in the substitution — `esort != eapp`), so it's a genuine
+two-recursor-interaction problem, harder than the single arith motive-level fix —
+not a `CONST_MAP`/emission issue (an earlier note saying so was a repro artifact;
+the worker *does* emit `teq`).  Or replacing `src/emitter.py`'s `de-refl`
+shortcut in the *production* pipeline.  So this remains a **parallel proof-of-concept** that
 certifies real obligations from real elaborated source — not the production
 trusted base.  (Moving βιζ + shift/subst1 out of the production trusted base needs
 that last wiring step.)
