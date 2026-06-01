@@ -69,10 +69,11 @@ def validate_eq():
     make prove_rec_partial_gen emit a proof mm0-rs rejects)."""
     induct._build(EQ)
     S1 = ESort("(lS lz)")
+    S0 = ESort("lz")                    # Prop -- Eq's result sort (Eq : .. -> Prop)
     TEQ = Const("teq")
     def teq3(a, b, c): return App(App(App(TEQ, a), b), c)
-    # teq : Pi A:Sort1, Pi a:A, Pi b:A, Sort1
-    tycon_exp = EPi(S1, EPi(Var(0), EPi(Var(1), S1)))
+    # teq : Pi A:Sort1, Pi a:A, Pi b:A, Prop
+    tycon_exp = EPi(S1, EPi(Var(0), EPi(Var(1), S0)))
     # refl : Pi A:Sort1, Pi a:A, teq A a a
     refl_exp = EPi(S1, EPi(Var(0), teq3(Var(1), Var(0), Var(0))))
     ok1 = EQ.tycon_type == tycon_exp

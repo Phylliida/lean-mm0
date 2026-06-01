@@ -310,11 +310,14 @@ LIST = Inductive("tlist", "(lS lz)", [
 ], "prec", params=(("A", NSort("(lS lz)")),))
 
 # Identity type / equality.  Indexed: params (A : Sort1) (a : A); index (b : A).
-#   teq   : Pi A:Sort1, Pi a:A, Pi b:A, Sort1
+#   teq   : Pi A:Sort1, Pi a:A, Pi b:A, Prop          (Eq is a Prop -- Sort 0!)
 #   refl  : Pi A:Sort1, Pi a:A, teq A a a              (index b := a)
 #   eqrec : Pi A, Pi a, Pi C:(Pi b:A, teq A a b -> Sort u),
 #             C a (refl A a) -> Pi b:A, Pi h:teq A a b, C b h    (the J rule)
-EQ = Inductive("teq", "(lS lz)", [
+# The result Sort is `lz` (Prop), matching the kernel `Eq.{u} : .. -> Prop`; an
+# earlier `(lS lz)` mis-stated Eq as Sort 1, which clashed when an `Eq` value sat
+# in a Prop-expecting slot (Decidable p, p : Prop) -- e.g. bool_dec_eq.lean.
+EQ = Inductive("teq", "lz", [
     Ctor("refl_eq", (), index_vals=(NVar("a"),)),
 ], "eqrec",
     params=(("A", NSort("(lS lz)")), ("a", NVar("A"))),
