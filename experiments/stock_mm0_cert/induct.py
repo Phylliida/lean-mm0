@@ -61,6 +61,31 @@ def napps(head: N, args):
     for a in args: head = NApp(head, a)
     return head
 
+# ---- universe polymorphism: detect free level variables in a generated type ----
+_LVL_KEYWORDS = {"lz", "lS", "lmax", "limax"}
+
+def _level_vars_in(t: T, acc: set) -> set:
+    """Collect the free level-VARIABLE identifiers occurring in a db-term's ESort
+    levels -- any token that is not a level keyword (lz/lS/lmax/limax) is a level
+    variable.  Used to bind exactly the universe params a generated axiom mentions:
+    the recursor's motive level `u` (always present) plus an inductive's own level
+    params (e.g. Eq's `v` for `A : Sort v`).  A non-polymorphic inductive (Bool /
+    List / Vec, whose Sorts are closed lz/lS towers) yields the empty set, so its
+    axioms are emitted exactly as before."""
+    if isinstance(t, ESort):
+        for tok in t.lvl.replace("(", " ").replace(")", " ").split():
+            if tok not in _LVL_KEYWORDS:
+                acc.add(tok)
+    elif isinstance(t, App):  _level_vars_in(t.f, acc); _level_vars_in(t.a, acc)
+    elif isinstance(t, Lam):  _level_vars_in(t.ty, acc); _level_vars_in(t.body, acc)
+    elif isinstance(t, EPi):  _level_vars_in(t.dom, acc); _level_vars_in(t.body, acc)
+    return acc
+
+def _lvl_binder(t: T) -> str:
+    """An MM0 `(v u: lvl)` binder list for the level vars a type mentions, or ``."""
+    vs = sorted(_level_vars_in(t, set()))
+    return (" (" + " ".join(vs) + ": lvl)") if vs else ""
+
 def _eval_n(t: N, env):
     """Evaluate a (closed-over-env) named term to a db-term, resolving NVar via
     `env` (name -> db-term).  Used to compute a recursive field's concrete index
@@ -227,11 +252,15 @@ def generate(ind) -> str:
         L.append(f"axiom shf_{a} (d c: nat): $ shf {a} d c {a} $;")
     for a in _atoms(ind):
         L.append(f"axiom sub_{a} (v: expr) (j: nat): $ sub {a} v j {a} $;")
-    # typing
-    L.append(f"axiom ht_{ind.tycon} (g: ctx): $ ht g {ind.tycon} {pp(ind.tycon_type)} $;")
+    # typing -- each axiom binds exactly the universe params its type mentions
+    # (none for a monomorphic inductive; the motive level `u` for every recursor;
+    # plus the inductive's own level params for a universe-polymorphic one, e.g. Eq).
+    L.append(f"axiom ht_{ind.tycon} (g: ctx){_lvl_binder(ind.tycon_type)}: "
+             f"$ ht g {ind.tycon} {pp(ind.tycon_type)} $;")
     for c in ind.ctors:
-        L.append(f"axiom ht_{c.name} (g: ctx): $ ht g {c.name} {pp(ind.ctor_types[c.name])} $;")
-    L.append(f"axiom ht_{ind.rec_name} (g: ctx) (u: lvl): "
+        L.append(f"axiom ht_{c.name} (g: ctx){_lvl_binder(ind.ctor_types[c.name])}: "
+                 f"$ ht g {c.name} {pp(ind.ctor_types[c.name])} $;")
+    L.append(f"axiom ht_{ind.rec_name} (g: ctx){_lvl_binder(ind.rec_type)}: "
              f"$ ht g {ind.rec_name} {pp(ind.rec_type)} $;")
     # gated iota, one per constructor
     L.append(_iota_axioms(ind))
@@ -317,10 +346,17 @@ LIST = Inductive("tlist", "(lS lz)", [
 # The result Sort is `lz` (Prop), matching the kernel `Eq.{u} : .. -> Prop`; an
 # earlier `(lS lz)` mis-stated Eq as Sort 1, which clashed when an `Eq` value sat
 # in a Prop-expecting slot (Decidable p, p : Prop) -- e.g. bool_dec_eq.lean.
+# UNIVERSE-POLYMORPHIC: A : Sort v for a level VARIABLE v (was the monomorphic
+# Sort 1).  generate() auto-detects `v` in teq/refl_eq/eqrec and binds it on each
+# typing axiom (ht_teq (g)(v: lvl) ..., eqrec (g)(u v: lvl) ... with u the motive
+# level), so MM0 unifies v at each use site -- `Eq.{1}` and a level-generic
+# `Eq.{u}` (e.g. my_eq_symm.{u}) both typecheck against the SAME axioms, with no
+# trusted-base change beyond the level binder.  This is the dual, at the inductive
+# level, of how ht_rec is universe-poly in its motive.
 EQ = Inductive("teq", "lz", [
     Ctor("refl_eq", (), index_vals=(NVar("a"),)),
 ], "eqrec",
-    params=(("A", NSort("(lS lz)")), ("a", NVar("A"))),
+    params=(("A", NSort("v")), ("a", NVar("A"))),
     indices=(("b", NVar("A")),))
 
 # Length-indexed vectors -- RECURSIVE *and* INDEXED.  param A:Sort1; index n:Nat.

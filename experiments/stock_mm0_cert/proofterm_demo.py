@@ -22,6 +22,7 @@ TARGETS = [
     ("math.lean",    "add_comm",     "add m n = add n m     -- THE theorem; inlines zero_add+succ_add"),
     ("bool_ops.lean","Bool.not_not", "not (not b) = b       -- case analysis on Bool"),
     ("nat_inj.lean", "succ_inj",     "S m = S n -> m = n     -- injectivity via transport"),
+    ("idx_match.lean","my_eq_symm",  "Eq a b -> Eq b a       -- J on a hyp, LEVEL-POLYMORPHIC .{u}"),
 ]
 
 

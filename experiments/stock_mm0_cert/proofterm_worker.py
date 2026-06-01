@@ -11,7 +11,7 @@ Scope: a closed, MONOMORPHIC proof whose body bridges within the supported fragm
 body drives a recursor at a generic motive level still needs open-level normalisation
 and is out of scope here.  Prints one RESULT line.
 """
-import os, sys, subprocess
+import os, re, sys, subprocess
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
@@ -57,8 +57,6 @@ def main():
     except Exception as ex:
         return fail("elab:%s" % type(ex).__name__)
 
-    if getattr(d, "level_params", ()):
-        return fail("skip:level-poly")
     try:
         for c in sorted(consts_in(d.value, set()) | consts_in(d.type_, set())):
             if c != decl and env.has(c) and type(env.get(c)).__name__ == "Definition" \
@@ -69,13 +67,22 @@ def main():
         tb, pb = db_cert.prove_ht(dbody, [])          # type the proof term
         proof = db_cert._coerce(pb, tb, dty, [])      # coerce inferred -> stated type
         nodes = db_cert.proof_nodes(proof)
+        bodys, tys = db_cert.pp(dbody), db_cert.pp(dty)
     except Exception as ex:
         return fail("%s:%s" % (type(ex).__name__, str(ex).split(chr(10))[0][:30].replace(" ", "_")))
+
+    # universe params -> (lv_u: lvl) theorem binders, so a LEVEL-POLYMORPHIC proof
+    # (e.g. my_eq_symm.{u}) is certified generically -- the poly Eq axioms unify the
+    # level at each use site, exactly as for level-generic de-refl obligations.
+    lps = [bridge.level_param_name(p) for p in (getattr(d, "level_params", ()) or ())]
+    blob = bodys + tys + proof
+    binders = "".join(f" ({p}: lvl)" for p in lps
+                      if re.search(r"\b" + re.escape(p) + r"\b", blob))
 
     prelude  = open(f"{HERE}/db.mm1").read()
     defblock = db_cert.gen_def_block()
     ind_blocks = "".join(bridge.IND_EMITTED)
-    thm = f"theorem pt: $ ht cnil {db_cert.pp(dbody)} {db_cert.pp(dty)} $ =\n'{proof};\n"
+    thm = f"theorem pt{binders}: $ ht cnil {bodys} {tys} $ =\n'{proof};\n"
     full = prelude + "\n" + blocks + "\n" + ind_blocks + "\n" + defblock + "\n" + thm
     mm1 = f"/tmp/pt_{base}_{decl}.mm1"; mmb = f"/tmp/pt_{base}_{decl}.mmb"
     open(mm1, "w").write(full)

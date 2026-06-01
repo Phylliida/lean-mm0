@@ -1060,24 +1060,36 @@ normal form against `src/kernel.py`'s own whnf):
   `zero_add` (`add 0 n = n`, `Nat.rec` whose step transports along the IH via `Eq.rec`,
   5208 nodes), `succ_add` (7960), **`add_comm` (`m + n = n + m`, double induction,
   inlining `zero_add`+`succ_add`, 29176 nodes)**, `Bool.not_not` (case analysis,
-  1838), `succ_inj` (injectivity via transport, 1677).  **No trusted-base change** —
-  db.mm1's `ht` judgment, recursor typing, and gated ι were always there; this just
-  *uses* them, and the free-variable / `_is_nat` robustness (the `trec` typing rule
-  feeds `induct.NAT.rec_type`, which carries non-singleton Nat consts, so the whnf
-  Nat-ι gate must match by NAME, not identity) make a full induction proof go through.
-  Delta-inlined helper lemmas are fine (`add_comm` inlines its two `def` helpers); a
-  per-decl proof-term mode is **not** wired into the sweep (kept separate from the
-  saturated de-refl track).
+  1838), `succ_inj` (injectivity via transport, 1677), and **`my_eq_symm.{u}`
+  (`Eq α a b → Eq α b a`, J on a hypothesis, LEVEL-POLYMORPHIC, 1078 nodes)**.  **No
+  trusted-base change** — db.mm1's `ht` judgment, recursor typing, and gated ι were
+  always there; this just *uses* them, and the free-variable / `_is_nat` robustness
+  (the `trec` typing rule feeds `induct.NAT.rec_type`, which carries non-singleton Nat
+  consts, so the whnf Nat-ι gate must match by NAME, not identity) make a full
+  induction proof go through.  Delta-inlined helper lemmas are fine (`add_comm` inlines
+  its two `def` helpers); a per-decl proof-term mode is **not** wired into the sweep.
+- **Universe-polymorphic generated inductives** (the enabler for `my_eq_symm.{u}`).
+  `induct.generate` now AUTO-DETECTS the level variables in each generated type and
+  binds them on the typing axioms: `ht_<tycon> (g)(v: lvl)`, `ht_<ctor> (g)(v: lvl)`,
+  `ht_<rec> (g)(u v: lvl)` (`u` = the recursor's motive level, always; `v` = the
+  inductive's own param).  `Eq` is now genuinely universe-poly (`teq : Π A:Sort v …`,
+  was the monomorphic `Sort 1`), so `Eq.{1}` and a generic `Eq.{u}` typecheck against
+  the SAME axioms — MM0 unifies the level at each use site, exactly as for the
+  recursor's motive.  The iota axioms are level-agnostic (params are `expr` vars), so
+  they're unchanged.  **No trusted-base change** (the binder is on the generated block,
+  which is itself emitted + checked); monomorphic inductives (Bool/List/Vec, closed
+  `lz`/`lS` Sorts) detect no level vars → byte-identical output, sweep unchanged at 136.
 
 **Still open / honest limits.**  The de-refl-obligation fragment is **saturated** for
 the elaborated corpus (only `not-convertible` skips remain there), and the whole-proof
-track now certifies closed, monomorphic, self-contained proofs *using the IH* (above).
-What that track does **not** yet cover: **level-polymorphic** proofs (`my_eq_symm.{u}`
-— a recursor driven at a generic motive level needs *open-level normalisation* in the
-certifier, beyond the closed `prove_norm_level`); proofs that cite an **opaque lemma**
-(a `theorem`, not a `def` — db.mm1 has no opaque-def, so the lemma's typing can't be
-assumed without inlining its body); and integration into the *sweep* (typing every
-not-convertible decl).  Also still open: mutual inductives; indexed `Nat.le`; or
+track now certifies closed, self-contained proofs *using the IH*, monomorphic **and
+level-polymorphic** (above).  What that track does **not** yet cover: proofs that cite
+an **opaque lemma** (a `theorem`, not a `def` — db.mm1 has no opaque-def, so the
+lemma's typing can't be assumed without inlining its body); poly inductives *other*
+than `Eq` (List/Vec are still spec'd monomorphic at `Sort 1` — making them poly is now
+just a one-line spec change, since the generator auto-detects); and integration into
+the *sweep* (typing every not-convertible decl).  Also still open: mutual inductives;
+indexed `Nat.le`; or
 replacing `src/emitter.py`'s `de-refl` shortcut in the *production* pipeline.  So this
 remains a **parallel proof-of-concept** that certifies real obligations from real
 elaborated source — not the production trusted base.  (Moving βιζ + shift/subst1 out
