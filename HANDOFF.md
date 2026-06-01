@@ -842,11 +842,12 @@ the trust boundary holds, and the examples genuinely verify end-to-end.
 
 ## Stock-MM0 trusted-base experiment (later work, in `experiments/stock_mm0_cert/`)
 
-This is a self-contained research arc (13 commits, `14addaf`..`56266f6`) that
-re-examines the project's core premise.  **It does not change the main
+This is a self-contained research arc (see `git log -- experiments/stock_mm0_cert/`)
+that re-examines the project's core premise.  **It does not change the main
 pipeline or trusted base** — it lives entirely under
-`experiments/stock_mm0_cert/` and has its own `README.md` (the authoritative,
-run-verified writeup; numbers below are copied from it).
+`experiments/stock_mm0_cert/` and has its own `README.md`.  Per "derive, don't
+document", figures (proof-node sizes, how many obligations certify) live in
+script output — run `coverage_sweep.py` — not in this doc.
 
 ### The question
 
@@ -945,6 +946,12 @@ normal form against `src/kernel.py`'s own whnf):
 - **The whole inductive spectrum** — Nat, Bool, parametric List, indexed Eq (J
   eliminator), recursive-indexed Vec — via the certifier (`db_cert.py`) and the
   inductive generator (`induct.py`).
+- **User inductives auto-derived from the kernel** — `bridge.register_inductive`
+  reads a `class`/`structure`/`inductive`'s kernel `Inductive`/`Constructor`/
+  `Recursor`, monomorphises at use-site levels, translates field/index types with
+  `_expr_to_N`, and feeds `induct.generate` — so data structures (`Pair`, `Sum`,
+  `And`, `True`, `False`, …) certify with **no hand-written `db.mm1` block**.
+  Their projections and instances are ordinary `def`s and ride the δ path.
 - **The kernel bridge** (`bridge.py`): translates a real `src/expr.py` term into
   the `db_cert` AST.  Covers β, ι, conversion, and:
   - **δ** (definitional unfolding) — a CIC `def d := body` is emitted as a
@@ -960,21 +967,28 @@ normal form against `src/kernel.py`'s own whnf):
     trusted axioms, the universe spec — unlike δ, not free.)
   - **nested recursor majors** — the Nat-ι branch normalises the major before
     firing succ-ι, so a *computed* major (`Nat.add (Nat.add ..) ..`) reduces.
-- **The capstone**: a real `examples/*.lean` driven through the *actual* pipeline
+- **The capstone**: real `examples/*.lean` driven through the *actual* pipeline
   (`src.lean_parser.elaborate` = parser→elaborator→kernel), whose `de-refl`
-  obligations (`Eq Nat a b` goals holding by computation — what `Eq.refl` / `by
-  rfl` discharge) are certified by stock mm0-c.  These are certified by
+  obligations (`Eq A a b` goals holding by computation — what `Eq.refl` / `by
+  rfl` discharge — over **any** bridged type `A`, not just `Nat`: Bool, lists,
+  data-structure values, …) are certified by stock mm0-c.  These are certified by
   **conversion** (`prove_conv` normalises both sides), which is what `Eq.refl`
   actually proves — not by value equality.
 
-**Still open / honest limits.**  The bridge targets *closed* `Eq Nat`
-obligations.  It does not yet cover: proofs with free variables (induction
-steps, abstract lemmas), obligations over types other than `Eq Nat`, mutual
-inductives, level-generic statements, or replacing `src/emitter.py`'s `de-refl`
-shortcut in the *production* pipeline.  So this remains a **parallel
-proof-of-concept** that certifies real obligations from real elaborated source —
-not the production trusted base.  (Moving βιζ + shift/subst1 out of the
-production trusted base needs that last wiring step.)
+**Still open / honest limits.**  The bridge targets *closed* `Eq` obligations
+over bridged types.  It does not yet cover: proofs with free variables (induction
+steps, abstract lemmas); **classes/structures over `Nat`** (e.g. `arith.lean`'s
+`Add`/`Mul` instances) — these now get *further* than before but hit a
+**param-level normalizer gap**: typing the structure's gated ι reaches the
+recursor's polymorphic motive level `u`, which `db_cert`'s closed-tower level
+normalizer can't handle yet (one-line `trec`→`ht_rec` typing rule gets past the
+prior wall, then exposes this one); structure fields that mention *defs* or
+*other* user inductives (`Decidable`'s `Not p` field, inheritance structs like
+`SemiRing`); mutual inductives; level-generic statements; or replacing
+`src/emitter.py`'s `de-refl` shortcut in the *production* pipeline.  So this
+remains a **parallel proof-of-concept** that certifies real obligations from real
+elaborated source — not the production trusted base.  (Moving βιζ + shift/subst1
+out of the production trusted base needs that last wiring step.)
 
 **Reproduce — and how the numbers are sourced.**  This section deliberately
 states *capabilities, not counts*: figures (proof-node sizes, how many
@@ -986,9 +1000,13 @@ experiment `README.md`):
   `run_db.py`, `run_db_typed.py`, `run_induct.py`, `bench.py`,
   `bridge_demo.py` (Nat), `bridge_list_demo.py`, `bridge_bool_demo.py`,
   `bridge_eq_demo.py`, `bridge_vec_demo.py`, `bridge_delta_demo.py` (δ),
-  `bridge_poly_demo.py` (universe-poly), `run_levels.py`, `capstone_demo.py`.
+  `bridge_poly_demo.py` (universe-poly), `bridge_struct_demo.py`
+  (classes/structures — also surfaces the param-level gap on `arith.lean`),
+  `run_levels.py`, `capstone_demo.py`.
 - whole-suite coverage: `python3 coverage_sweep.py` — runs `coverage_worker.py`
-  over every `examples/*.lean` (subprocess per file), prints a fresh per-file
-  table + headline, and **asserts** the invariant that every file with a
-  certified obligation passes both mm0-rs and mm0-c (exits non-zero otherwise).
-  `coverage.md` describes the method; run the sweep for the current spread.
+  over every `examples/*.lean` (subprocess per file, detector = `Eq A` over any
+  type), prints a fresh per-file table + a **"Top skip reasons"** ranking that
+  names its own next bridging targets (e.g. `unsup:<const>` / `ValueError:<head>`),
+  and **asserts** the invariant that every file with a certified obligation
+  passes both mm0-rs and mm0-c (exits non-zero otherwise).  `coverage.md`
+  describes the method; run the sweep for the current spread.
