@@ -348,9 +348,28 @@ def _coerce(proof, have, want, ctx):
         # Fail-safe: if the param isn't actually a bound metavar at the use site,
         # MM0 rejects the cert (both-checkers invariant) -- never a false accept.
         return proof
+    nf_have, cnf = prove_norm(have)                   # have may hide a param match
+    if nf_have != have and _levels_unify(nf_have, want):  # behind an unreduced redex
+        want_sort = _prove_sort(nf_have, ctx)
+        return f"(ht_conv {proof} {cnf or '(deq_refl)'} {want_sort})"
     conv = prove_conv(have, want)
-    _u, want_sort = prove_ht(want, ctx)               # ht ctx want (esort u)
+    want_sort = _prove_sort(want, ctx)                # ht ctx want (esort k)
     return f"(ht_conv {proof} {conv or '(deq_refl)'} {want_sort})"
+
+def _prove_sort(B: T, ctx) -> str:
+    """Proof of `ht ctx B (esort k)` for some concrete k -- B is a type.  This is
+    ht_conv's well-formedness premise.  prove_ht(B) may give B's sort as an
+    unreduced recursor-result redex (e.g. a sort-valued `brec`'s result type
+    `brec_motive @ major` rather than a literal sort -- bool_dec_eq); normalise it
+    to a literal `esort` and coerce, so MM0 sees a real sort (not `esort != eapp`)."""
+    tB, pB = prove_ht(B, ctx)
+    if isinstance(tB, ESort):
+        return pB
+    nf, c = prove_norm(tB)
+    if isinstance(nf, ESort):
+        _u, sortp = prove_ht(nf, ctx)                 # ht ctx (esort k) (esort (lS k))
+        return f"(ht_conv {pB} {c or '(deq_refl)'} {sortp})"
+    raise ValueError(f"type's sort did not normalise to esort: {pp(B)} : {pp(tB)}")
 
 # ---- level unification: does `want` become `have` by instantiating want's params?
 def _unify_lvl(ph, pw, subst):
@@ -384,6 +403,26 @@ def _levels_unify(have, want, subst=None):
         return _levels_unify(have.dom, want.dom, subst) and _levels_unify(have.body, want.body, subst)
     return False
 
+# ---- level instantiation: monomorphise a recursor type at a concrete motive level
+def _subst_level_str(s, name, repl):
+    import re
+    return re.sub(rf"\b{re.escape(name)}\b", repl, s)
+
+def inst_level(t: T, name: str, repl: str) -> T:
+    """Substitute level string `repl` for the level param `name` in every ESort."""
+    if isinstance(t, ESort): return ESort(_subst_level_str(t.lvl, name, repl))
+    if isinstance(t, App):   return App(inst_level(t.f, name, repl), inst_level(t.a, name, repl))
+    if isinstance(t, Lam):   return Lam(inst_level(t.ty, name, repl), inst_level(t.body, name, repl))
+    if isinstance(t, EPi):   return EPi(inst_level(t.dom, name, repl), inst_level(t.body, name, repl))
+    return t
+
+def _codomain_sort(t: T) -> str:
+    """Peel Pi binders off a motive kind `Pi .., esort k` and return the level k."""
+    while isinstance(t, EPi): t = t.body
+    if not isinstance(t, ESort):
+        raise ValueError(f"motive codomain is not a sort: {pp(t)}")
+    return t.lvl
+
 # ---------------- recursor gating:  ht (trec @ cC @ z @ s) (Pi m, cC m) ----------------
 # The recursor type tail R0 (motive C = evar 0), matching db.mm1's ht_rec.
 _SUCC_CASE = EPi(TNAT, EPi(App(Var(2), Var(0)), App(Var(3), App(TSUCC, Var(1)))))
@@ -405,17 +444,25 @@ def prove_rec_partial(cC: T, z: T, s: T) -> str:
 
 def prove_rec_partial_gen(ind, params, C: T, minors) -> str:
     """ht g (<rec> @ params @ C @ minors...) (Pi x:(T params), C x).
-    Walks the recursor type applying each argument via ht_app: params and
-    minors are coerced to their expected (already-substituted) domains; C is
-    applied without coercion (MM0 unifies the motive level u)."""
+    MONOMORPHISE the recursor type at u := k (read off C's normalised codomain),
+    so no param level reaches the normaliser; MM0 unifies the axiom's bound u."""
+    tC, pC = prove_ht(C, [])
+    nf_tC, cC = prove_norm(tC)
+    k = _codomain_sort(nf_tC)
+    rec_type = inst_level(ind.rec_type, "u", k)
+    if nf_tC != tC:
+        _s, sortp = prove_ht(nf_tC, [])
+        pC = f"(ht_conv {pC} {cC or '(deq_refl)'} {sortp})"; tC = nf_tC
     p = f"(ht_{ind.rec_name})"
-    cur = ind.rec_type
-    plan = [(prm, True) for prm in params] + [(C, False)] \
-         + [(m, True) for m in minors]
-    for arg, do_coerce in plan:
-        targ, parg = prove_ht(arg, [])
-        if do_coerce:
-            parg = _coerce(parg, targ, cur.dom, [])
+    cur = rec_type
+    plan = [(prm, None) for prm in params] + [(C, (pC, tC))] \
+         + [(m, None) for m in minors]
+    for arg, pre in plan:
+        if pre is None:
+            targ, parg = prove_ht(arg, [])
+        else:
+            parg, targ = pre
+        parg = _coerce(parg, targ, cur.dom, [])
         res, subp = prove_sub(cur.body, arg, 0)
         p = f"(ht_app {p} {parg} {subp})"
         cur = res
