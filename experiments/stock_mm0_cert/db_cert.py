@@ -152,6 +152,17 @@ def _app_cong(cf, ca):
     if cf is None and ca is None: return None
     return f"(deq_app {cf or '(deq_refl)'} {ca or '(deq_refl)'})"
 
+def _is_nat(e: T, name: str) -> bool:
+    """Is `e` the Nat-fragment const `name` (tnat/tzero/tsucc/trec)?  Compared by
+    NAME, not identity: db_cert's reduction once relied on the four Nat singletons
+    (to_db maps them to the module objects), but the `trec` TYPING rule returns
+    `induct.NAT.rec_type`, which induct.py builds with fresh `Const("tzero")` /
+    `Const("tsucc")` -- so a major substituted from that rec type is a non-singleton
+    tzero.  Typing a real induction proof (e.g. zero_add's `add 0 0`) reduces such a
+    major, so the gate must match by name.  Names tnat/tzero/tsucc/trec are reserved
+    for Nat (generated inductives are sanitized + unique), so this is unambiguous."""
+    return isinstance(e, Const) and e.name == name
+
 def whnf(e: T, ctx=None):
     """Weak-head reduce; return (wh, conv|None) with conv proving deq G e wh.
     `ctx` (de-Bruijn binder types, innermost LAST) is threaded ONLY so the iota
@@ -173,7 +184,7 @@ def whnf(e: T, ctx=None):
         return wr, _trans(cong_f, _trans(f"(deq_beta {psub})", cr))
     g = App(f_wh, e.a)
     head, args = uncurry(g)
-    if head is TREC and len(args) == 4:             # recursor redex
+    if _is_nat(head, "trec") and len(args) == 4:    # recursor redex
         C, z, s, major = args
         # Fully NORMALISE the major (not just whnf): when the major is itself a
         # computation (e.g. Nat.add 8 9), whnf only exposes `succ K` with K an
@@ -182,12 +193,12 @@ def whnf(e: T, ctx=None):
         # predecessor k below is always a literal.  Fixes nested Nat.add.
         mj, cmj = prove_norm(major, ctx)
         cong_mj = f"(deq_app (deq_refl) {cmj})" if cmj else None
-        if mj is TZERO:
+        if _is_nat(mj, "tzero"):
             gate = prove_rec_partial(C, z, s, ctx)   # ht (trec@C@z@s) (Pi m, C m)
             wz, cz = whnf(z, ctx)
             iota = f"(deq_iota_zero {gate})"
             return wz, _trans(cong_f, _trans(cong_mj, _trans(iota, cz)))
-        if isinstance(mj, App) and mj.f is TSUCC:
+        if isinstance(mj, App) and _is_nat(mj.f, "tsucc"):
             k = mj.a
             gate = prove_rec_partial(C, z, s, ctx)
             hk = _ht_as_nat(k, ctx)                   # ht g k tnat (k numeral OR free var)
@@ -487,9 +498,9 @@ def prove_rec_partial_gen(ind, params, C: T, minors, ctx=None) -> str:
 
 def prove_ht_nat(e: T) -> str:
     """Proof of  ht G e tnat  for a numeral e (succ^n zero)."""
-    if e is TZERO:
+    if _is_nat(e, "tzero"):
         return "(ht_zero)"
-    if isinstance(e, App) and e.f is TSUCC:
+    if isinstance(e, App) and _is_nat(e.f, "tsucc"):
         return f"(ht_app (ht_succ) {prove_ht_nat(e.a)} (sub_nat))"
     raise ValueError(f"not a numeral: {pp(e)}")
 

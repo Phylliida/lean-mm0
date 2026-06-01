@@ -1052,19 +1052,34 @@ normal form against `src/kernel.py`'s own whnf):
   free variables in the *level* context).  A poly *def* used at a *generic* level
   still skips (`level_to_nat` can't name a generic monomorphisation); only the goal's
   own `Sort u` is generic here.
+- **Whole proof TERMS — proofs that USE the induction hypothesis** (`proofterm_demo.py`).
+  A new, deeper track: instead of certifying the `de-refl` LEAVES of a proof (a
+  conversion `a ≡ b`), certify an *entire proof term* by TYPING it against its stated
+  type — `ht cnil <body> <type>` (`prove_ht` + a final `_coerce` to the stated type).
+  This reaches real theorems, not rfl leaves.  Certified through **both** checkers:
+  `zero_add` (`add 0 n = n`, `Nat.rec` whose step transports along the IH via `Eq.rec`,
+  5208 nodes), `succ_add` (7960), **`add_comm` (`m + n = n + m`, double induction,
+  inlining `zero_add`+`succ_add`, 29176 nodes)**, `Bool.not_not` (case analysis,
+  1838), `succ_inj` (injectivity via transport, 1677).  **No trusted-base change** —
+  db.mm1's `ht` judgment, recursor typing, and gated ι were always there; this just
+  *uses* them, and the free-variable / `_is_nat` robustness (the `trec` typing rule
+  feeds `induct.NAT.rec_type`, which carries non-singleton Nat consts, so the whnf
+  Nat-ι gate must match by NAME, not identity) make a full induction proof go through.
+  Delta-inlined helper lemmas are fine (`add_comm` inlines its two `def` helpers); a
+  per-decl proof-term mode is **not** wired into the sweep (kept separate from the
+  saturated de-refl track).
 
-**Still open / honest limits.**  With the above, **the de-refl-obligation fragment is
-saturated** for the elaborated corpus: the only remaining sweep skip is
-`not-convertible` (8 files).  Those are not de-refl leaves at all — they are whole
-proofs that *use* the induction hypothesis (the actual induction step), case analysis,
-or a hypothesis (e.g. `my_eq_symm`'s `Eq α a b → Eq α b a`).  Certifying them means
-typing a whole proof *term* (`prove_ht` against the stated type), and — where the
-proof cites other lemmas — handling opaque-lemma references (db.mm1 has no
-opaque-def); a separate, larger capability.  Also still open: mutual inductives;
-indexed
-`Nat.le`; or replacing `src/emitter.py`'s `de-refl` shortcut in the *production*
-pipeline.  So this remains
-a **parallel proof-of-concept** that certifies real obligations from real
+**Still open / honest limits.**  The de-refl-obligation fragment is **saturated** for
+the elaborated corpus (only `not-convertible` skips remain there), and the whole-proof
+track now certifies closed, monomorphic, self-contained proofs *using the IH* (above).
+What that track does **not** yet cover: **level-polymorphic** proofs (`my_eq_symm.{u}`
+— a recursor driven at a generic motive level needs *open-level normalisation* in the
+certifier, beyond the closed `prove_norm_level`); proofs that cite an **opaque lemma**
+(a `theorem`, not a `def` — db.mm1 has no opaque-def, so the lemma's typing can't be
+assumed without inlining its body); and integration into the *sweep* (typing every
+not-convertible decl).  Also still open: mutual inductives; indexed `Nat.le`; or
+replacing `src/emitter.py`'s `de-refl` shortcut in the *production* pipeline.  So this
+remains a **parallel proof-of-concept** that certifies real obligations from real
 elaborated source — not the production trusted base.  (Moving βιζ + shift/subst1 out
 of the production trusted base needs that last wiring step.)
 
@@ -1084,6 +1099,8 @@ experiment `README.md`):
   `(m n : Nat) → add m (succ n) = succ (add m n)`),
   `levelgen_demo.py` (level-generic / open-universe obligations, e.g.
   `(α : Sort u) (x : α) → (fun z => z) x = x`, generic over `u`),
+  `proofterm_demo.py` (whole proof TERMS that use the IH — `zero_add`, `add_comm`,
+  `Bool.not_not`, … — typed via `ht cnil body type`),
   `run_levels.py`, `capstone_demo.py`.
 - whole-suite coverage: `python3 coverage_sweep.py` — runs `coverage_worker.py`
   over every `examples/*.lean` (subprocess per file, detector = `Eq A` over any
