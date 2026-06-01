@@ -952,6 +952,18 @@ normal form against `src/kernel.py`'s own whnf):
   `_expr_to_N`, and feeds `induct.generate` — so data structures (`Pair`, `Sum`,
   `And`, `True`, `False`, …) certify with **no hand-written `db.mm1` block**.
   Their projections and instances are ordinary `def`s and ride the δ path.
+- **Typeclasses / structures over `Nat`** (`arith.lean`'s `Add`/`Mul` instances,
+  algebra structures, `Decidable` composition, …) — certified by **unifying** a
+  recursor's bound motive level rather than converting it.  A recursor's typing
+  axiom is universe-poly in `u` (`ht_rec (g)(u: lvl)`); typing one inside a `def`
+  body reaches that generic `u`, which the *closed* level normaliser can't (and
+  shouldn't) prove as a conversion (`leveq (lS lz) u`).  Instead `_coerce` notes
+  when the expected type becomes the actual type by *instantiating* `u` and emits
+  the proof bare — MM0's `ht_app` unifies the bound level var on its side, exactly
+  as the hand-written Nat / generated-recursor paths already do.  (Plus: the App
+  typing rule whnf's a function's type before requiring a Π, so a recursor's
+  stuck result type `C @ major` is reduced.)  Fail-safe: a wrong unification
+  yields a cert **both** stock checkers reject — never a false accept.
 - **The kernel bridge** (`bridge.py`): translates a real `src/expr.py` term into
   the `db_cert` AST.  Covers β, ι, conversion, and:
   - **δ** (definitional unfolding) — a CIC `def d := body` is emitted as a
@@ -977,18 +989,17 @@ normal form against `src/kernel.py`'s own whnf):
 
 **Still open / honest limits.**  The bridge targets *closed* `Eq` obligations
 over bridged types.  It does not yet cover: proofs with free variables (induction
-steps, abstract lemmas); **classes/structures over `Nat`** (e.g. `arith.lean`'s
-`Add`/`Mul` instances) — these now get *further* than before but hit a
-**param-level normalizer gap**: typing the structure's gated ι reaches the
-recursor's polymorphic motive level `u`, which `db_cert`'s closed-tower level
-normalizer can't handle yet (one-line `trec`→`ht_rec` typing rule gets past the
-prior wall, then exposes this one); structure fields that mention *defs* or
-*other* user inductives (`Decidable`'s `Not p` field, inheritance structs like
-`SemiRing`); mutual inductives; level-generic statements; or replacing
-`src/emitter.py`'s `de-refl` shortcut in the *production* pipeline.  So this
-remains a **parallel proof-of-concept** that certifies real obligations from real
-elaborated source — not the production trusted base.  (Moving βιζ + shift/subst1
-out of the production trusted base needs that last wiring step.)
+steps, abstract lemmas); structure fields that mention *defs* or *other* user
+inductives (`Decidable`'s `Not p` field, inheritance structs like `SemiRing` —
+`_db_name_of`/`_expr_to_N` only resolve base consts); mutual inductives;
+**level-generic** statements (quantified over `u` — the bridge monomorphises at
+concrete use-site levels, so a *generic* `Eq` goal would need level variables in
+`db.mm1`; note this is distinct from the recursor's bound motive `u`, which *is*
+handled, by unification); indexed `Nat.le`; or replacing `src/emitter.py`'s
+`de-refl` shortcut in the *production* pipeline.  So this remains a **parallel
+proof-of-concept** that certifies real obligations from real elaborated source —
+not the production trusted base.  (Moving βιζ + shift/subst1 out of the
+production trusted base needs that last wiring step.)
 
 **Reproduce — and how the numbers are sourced.**  This section deliberately
 states *capabilities, not counts*: figures (proof-node sizes, how many
