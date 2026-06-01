@@ -1039,18 +1039,29 @@ normal form against `src/kernel.py`'s own whnf):
   `succ n` in `add m (succ n)`, a two-binder case exercising `ht_var0` *and*
   `ht_weak`).  Both checkers accept; closed obligations are byte-identical to before
   (`cnil`), zero per-file regressions.
+- **Level-generic (open-universe) de-refl obligations** (`levelgen_demo.py`; in the
+  sweep, `hop.lean`'s `rewrite_refl.{u}`).  A goal quantified over a universe param
+  `u` — e.g. `(α : Sort u) (x : α) → Eq α ((fun z => z) x) x`, a β-step generic over
+  `u` (the demo also does a dual-universe `(fun w => x) y = x`).  The bridge renders
+  an OPEN level structurally with its bound name (`Sort u` → `(esort lv_u)`,
+  `level_param_name`) and the worker binds each as a `(lv_u: lvl)` theorem binder, so
+  the certificate is proved GENERICALLY, once, over all `u`.  **The key finding: this
+  needs NO trusted-base change** — db.mm1's `ht_sort (g)(l: lvl)` and `deq_refl (g)(e)`
+  already bind a level metavariable, so an open level simply becomes a
+  universally-quantified theorem binder (the exact dual of the free-variable work —
+  free variables in the *level* context).  A poly *def* used at a *generic* level
+  still skips (`level_to_nat` can't name a generic monomorphisation); only the goal's
+  own `Sort u` is generic here.
 
-**Still open / honest limits.**  The bridge now certifies `Eq` obligations with
-free variables in context (above), but only the *de-refl leaves* — goals that hold
-by computation (what `Eq.refl` / `by rfl` discharge).  It does **not** cover proofs
-that *use* the induction hypothesis (the actual induction step), case analysis, or
-any non-`rfl` reasoning — those are whole proofs, not single `de-refl` obligations.
-Also still open: mutual inductives; **open-level** statements — a goal mentioning a
-*free* level variable `u` (e.g. `hop.lean`'s `rewrite_refl`, a `Sort u` obligation),
-which would need genuine level variables in `db.mm1`.  (CLOSED `max`/`imax` are now
-evaluated by the bridge, above; the bridge still monomorphises poly defs at concrete
-use-site levels, so only a goal *quantified over* `u` is out of reach — distinct from
-the recursor's bound motive `u`, which *is* handled, by unification.)  Also: indexed
+**Still open / honest limits.**  With the above, **the de-refl-obligation fragment is
+saturated** for the elaborated corpus: the only remaining sweep skip is
+`not-convertible` (8 files).  Those are not de-refl leaves at all — they are whole
+proofs that *use* the induction hypothesis (the actual induction step), case analysis,
+or a hypothesis (e.g. `my_eq_symm`'s `Eq α a b → Eq α b a`).  Certifying them means
+typing a whole proof *term* (`prove_ht` against the stated type), and — where the
+proof cites other lemmas — handling opaque-lemma references (db.mm1 has no
+opaque-def); a separate, larger capability.  Also still open: mutual inductives;
+indexed
 `Nat.le`; or replacing `src/emitter.py`'s `de-refl` shortcut in the *production*
 pipeline.  So this remains
 a **parallel proof-of-concept** that certifies real obligations from real
@@ -1071,6 +1082,8 @@ experiment `README.md`):
   (classes/structures — also surfaces the param-level gap on `arith.lean`),
   `freevar_demo.py` (free-variable de-refl obligations, e.g.
   `(m n : Nat) → add m (succ n) = succ (add m n)`),
+  `levelgen_demo.py` (level-generic / open-universe obligations, e.g.
+  `(α : Sort u) (x : α) → (fun z => z) x = x`, generic over `u`),
   `run_levels.py`, `capstone_demo.py`.
 - whole-suite coverage: `python3 coverage_sweep.py` — runs `coverage_worker.py`
   over every `examples/*.lean` (subprocess per file, detector = `Eq A` over any

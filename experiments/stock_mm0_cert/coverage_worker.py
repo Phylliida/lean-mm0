@@ -188,7 +188,16 @@ def main():
             nfa, _ = db_cert.prove_norm(dl, gctx); nfb, _ = db_cert.prove_norm(dr, gctx)
             if db_cert.pp(nfa) != db_cert.pp(nfb):
                 skipped.append("bridge-nf-mismatch"); continue
-            certified.append((name, val, G, db_cert.pp(dl), db_cert.pp(dr), conv,
+            dls, drs = db_cert.pp(dl), db_cert.pp(dr)
+            # universe params that actually appear (e.g. `Sort u` in a binder type) ->
+            # `(lv_u: lvl)` theorem binders, so a level-polymorphic obligation is
+            # certified GENERICALLY -- ht_sort / deq_refl already bind a level
+            # metavariable, so no trusted-base change is needed.
+            lps = [bridge.level_param_name(p) for p in (getattr(d, "level_params", ()) or ())]
+            blob = G + dls + drs + conv
+            binders = "".join(f" ({p}: lvl)" for p in lps
+                              if re.search(r"\b" + re.escape(p) + r"\b", blob))
+            certified.append((name, val, binders, G, dls, drs, conv,
                               db_cert.proof_nodes(conv)))
         except bridge.Unsupported as ex:
             skipped.append(_reason("unsup", ex))
@@ -204,8 +213,8 @@ def main():
     if certified:
         prelude  = open(f"{HERE}/db.mm1").read()
         defblock = db_cert.gen_def_block()
-        thms = [f"theorem cov_{i}: $ deq {G} {dl} {dr} $ =\n'{conv};\n"
-                for i, (nm, val, G, dl, dr, conv, nodes) in enumerate(certified)]
+        thms = [f"theorem cov_{i}{binders}: $ deq {G} {dl} {dr} $ =\n'{conv};\n"
+                for i, (nm, val, binders, G, dl, dr, conv, nodes) in enumerate(certified)]
         # bridge.IND_EMITTED holds blocks for any user inductive (class/structure)
         # auto-derived during this file's certification; they must precede the
         # defblock (projections/instances) that reference them.

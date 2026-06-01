@@ -90,14 +90,43 @@ CONST_MAP = {
 }
 
 
-from src.levels import LZero, LSucc, LMax, LIMax
+from src.levels import LZero, LSucc, LMax, LIMax, LParam
+
+
+def level_param_name(name: str) -> str:
+    """A Lean level-param name (`u`, `v`, `u_1`) -> a collision-proof MM0 `lvl`
+    identifier.  Prefixed so it can never clash with a db.mm1 term (lz / lS / ...);
+    the worker binds each as a `(lv_u: lvl)` theorem binder and the bridge renders
+    `Sort u` as `(esort lv_u)`, so an OPEN-level (universe-polymorphic) goal is
+    certified generically -- exactly as db.mm1's ht_sort / deq_refl already bind a
+    level metavariable.  (No trusted-base change: the level becomes a quantified
+    binder, not a new axiom.)"""
+    return "lv_" + name.replace(".", "_").replace("'", "p")
+
+
+def _level_has_param(l) -> bool:
+    if isinstance(l, LParam):         return True
+    if isinstance(l, LSucc):          return _level_has_param(l.arg)
+    if isinstance(l, (LMax, LIMax)):  return _level_has_param(l.a) or _level_has_param(l.b)
+    return False
+
+
+def _render_open_level(l) -> str:
+    """Render a level tree structurally (no evaluation), substituting bound param
+    names.  Used when the level mentions a param -- a CLOSED level is evaluated
+    instead (level_to_str), so closed `max 1 1` collapses to a tower while
+    `max u 1` stays `(lmax lv_u (lS lz))` for the certifier's leveq laws."""
+    if isinstance(l, LZero):   return "lz"
+    if isinstance(l, LSucc):   return f"(lS {_render_open_level(l.arg)})"
+    if isinstance(l, LMax):    return f"(lmax {_render_open_level(l.a)} {_render_open_level(l.b)})"
+    if isinstance(l, LIMax):   return f"(limax {_render_open_level(l.a)} {_render_open_level(l.b)})"
+    if isinstance(l, LParam):  return level_param_name(l.name)
+    raise Unsupported(f"level {l!r} (LMeta unsupported -- must be solved before bridging)")
 
 
 def _eval_closed_level(l) -> int:
     """A CLOSED level (no param / meta) -> its numeral, evaluating max / imax with
-    CIC semantics (imax a 0 = 0, else max a b).  Raises Unsupported on an open level
-    (LParam / LMeta) -- those are the genuine level-generic case (hop.lean's `u`),
-    which would need level variables in db.mm1 and stays out of fragment."""
+    CIC semantics (imax a 0 = 0, else max a b).  Raises Unsupported on a meta."""
     if isinstance(l, LZero):  return 0
     if isinstance(l, LSucc):  return _eval_closed_level(l.arg) + 1
     if isinstance(l, LMax):   return max(_eval_closed_level(l.a), _eval_closed_level(l.b))
@@ -108,12 +137,15 @@ def _eval_closed_level(l) -> int:
 
 
 def level_to_str(l) -> str:
-    """Translate a CIC Level to a db.mm1 level string.  Closed `max`/`imax` (e.g.
-    `Pair.{1,1} : Sort (max 1 1)`) are EVALUATED to their normal-form lS-tower --
-    they are definitionally equal to a numeral, exactly as the kernel treats them,
-    so the certificate carries the reduced level directly.  (db.mm1 also has lmax /
-    limax + the leveq laws to reduce them; evaluating here keeps the MONO / inductive
-    name tags bijective, so `max 1 1` and `1` can't collide on `name_1`.)"""
+    """Translate a CIC Level to a db.mm1 level string.  An OPEN level (mentioning a
+    universe param `u`) is rendered structurally with the bound param name
+    (`Sort u` -> `(esort lv_u)`), so a level-polymorphic goal certifies generically.
+    A CLOSED `max`/`imax` (e.g. `Pair.{1,1} : Sort (max 1 1)`) is EVALUATED to its
+    normal-form lS-tower -- definitionally equal to a numeral, exactly as the kernel
+    treats it -- which also keeps the MONO / inductive name tags bijective so
+    `max 1 1` and `1` can't collide on `name_1`."""
+    if _level_has_param(l):
+        return _render_open_level(l)
     n = _eval_closed_level(l)
     s = "lz"
     for _ in range(n):
@@ -122,7 +154,9 @@ def level_to_str(l) -> str:
 
 
 def level_to_nat(l) -> int:
-    """Closed level -> its numeral, for sanitized def / inductive names."""
+    """Closed level -> its numeral, for sanitized def / inductive names.  An open
+    level can't name a monomorphisation, so it stays Unsupported (a poly def used at
+    a *generic* level still skips -- distinct from a generic Sort in the goal type)."""
     return _eval_closed_level(l)
 
 
