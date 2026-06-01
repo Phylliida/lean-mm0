@@ -289,6 +289,17 @@ def prove_ht(e: T, ctx):
         if e.name in REC_OF:
             ind = REC_OF[e.name]
             return ind.rec_type, f"(ht_{ind.rec_name})"
+        if e.name == "trec":
+            # Nat's recursor, typed generically.  db.mm1's ht_rec axiom is
+            # `ht_rec (g)(u: lvl)`: universe-poly in the motive level u, and
+            # induct.NAT.rec_type reproduces that type verbatim (motive kind
+            # `epi tnat (esort u)`).  The generic `u` is fine here -- when this
+            # type is *applied* to a concrete motive, _coerce's level-unification
+            # instantiates u to the motive's actual level (MM0 unifies the bound
+            # var on its side), so u never reaches the closed level normalizer.
+            import induct
+            if induct.NAT.rec_type is None: induct._build(induct.NAT)
+            return induct.NAT.rec_type, "(ht_rec)"
         raise ValueError(f"no typing rule for {e.name}")
     if isinstance(e, Var):
         return _ht_var(e.i, ctx)
@@ -302,6 +313,13 @@ def prove_ht(e: T, ctx):
         return EPi(e.ty, tb), f"(ht_lam {pa} {pb})"
     if isinstance(e, App):
         tf, pf = prove_ht(e.f, ctx)
+        if not isinstance(tf, EPi):
+            # a function's type can be a stuck redex -- e.g. a recursor's result
+            # type `C @ major` (C a lambda).  whnf it to expose the Pi, coercing
+            # the proof across that (beta/delta/iota) conversion via ht_conv.
+            nf, _c = whnf(tf)
+            if isinstance(nf, EPi):
+                pf = _coerce(pf, tf, nf, ctx); tf = nf
         assert isinstance(tf, EPi), f"applying non-Pi {pp(tf)}"
         ta, pa = prove_ht(e.a, ctx)
         pa = _coerce(pa, ta, tf.dom, ctx)
@@ -321,9 +339,50 @@ def _ht_var(i, ctx):
 def _coerce(proof, have, want, ctx):
     if have == want:
         return proof
+    if _levels_unify(have, want):
+        # `want` becomes `have` by instantiating its free param levels (e.g. a
+        # recursor's motive kind `epi tnat (esort u)` matched against the
+        # concrete motive's `epi tnat (esort (lS lz))`).  MM0's ht_app unifies
+        # that bound level var on its side, so NO ht_conv is needed -- emit the
+        # proof bare, exactly as prove_rec_partial / prove_rec_partial_gen do.
+        # Fail-safe: if the param isn't actually a bound metavar at the use site,
+        # MM0 rejects the cert (both-checkers invariant) -- never a false accept.
+        return proof
     conv = prove_conv(have, want)
     _u, want_sort = prove_ht(want, ctx)               # ht ctx want (esort u)
     return f"(ht_conv {proof} {conv or '(deq_refl)'} {want_sort})"
+
+# ---- level unification: does `want` become `have` by instantiating want's params?
+def _unify_lvl(ph, pw, subst):
+    """Parsed levels ph (concrete-ish), pw (may contain params).  Bind each param
+    in pw consistently to the matching subtree of ph.  Returns True on success."""
+    if pw[0] == "param":
+        name = pw[1]
+        if name in subst: return subst[name] == ph
+        subst[name] = ph; return True
+    if ph[0] != pw[0]: return False
+    if ph[0] == "lz": return True
+    if ph[0] == "lS": return _unify_lvl(ph[1], pw[1], subst)
+    if ph[0] in ("lmax", "limax"):
+        return _unify_lvl(ph[1], pw[1], subst) and _unify_lvl(ph[2], pw[2], subst)
+    return False
+
+def _levels_unify(have, want, subst=None):
+    """True iff `want` equals `have` after instantiating param levels appearing
+    in `want` (term structure must match exactly; only ESort levels may differ)."""
+    if subst is None: subst = {}
+    if type(have) is not type(want): return False
+    if isinstance(have, ESort):
+        return _unify_lvl(_parse_level(have.lvl), _parse_level(want.lvl), subst)
+    if isinstance(have, Var):   return have.i == want.i
+    if isinstance(have, Const): return have.name == want.name
+    if isinstance(have, App):
+        return _levels_unify(have.f, want.f, subst) and _levels_unify(have.a, want.a, subst)
+    if isinstance(have, Lam):
+        return _levels_unify(have.ty, want.ty, subst) and _levels_unify(have.body, want.body, subst)
+    if isinstance(have, EPi):
+        return _levels_unify(have.dom, want.dom, subst) and _levels_unify(have.body, want.body, subst)
+    return False
 
 # ---------------- recursor gating:  ht (trec @ cC @ z @ s) (Pi m, cC m) ----------------
 # The recursor type tail R0 (motive C = evar 0), matching db.mm1's ht_rec.
