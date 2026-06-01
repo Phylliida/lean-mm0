@@ -983,6 +983,14 @@ normal form against `src/kernel.py`'s own whnf):
   - **level equations** — a `leveq` semilattice-laws block in `db.mm1` +
     `deq_sort`, so `Sort (max 0 1) ≡ Sort 1` etc. certify.  (This *did* add ~13
     trusted axioms, the universe spec — unlike δ, not free.)
+  - **closed `max` / `imax` in bridged terms** — the bridge's `level_to_str`
+    EVALUATES a closed `max`/`imax` to its normal-form `lS`-tower (`_eval_closed_level`,
+    CIC's `imax a 0 = 0` rule), so `Pair.{1,1} : Sort (max 1 1)` / `Sum.{1,1}` reach
+    the certifier as `Sort 1`.  These are definitionally equal to a numeral exactly as
+    the kernel treats them; evaluating in the bridge also keeps the MONO / inductive
+    name tags bijective (`max 1 1` and `1` can't collide on `name_1`).  Unblocked the
+    `unsup:level` cluster — `parametric_inst` (Pair projections), `notation_brackets`,
+    `cases` (Sum).  No trusted-base change (db.mm1 already had `lmax`/`limax`).
   - **nested recursor majors** — the Nat-ι branch normalises the major before
     firing succ-ι, so a *computed* major (`Nat.add (Nat.add ..) ..`) reduces.
 - **The capstone**: real `examples/*.lean` driven through the *actual* pipeline
@@ -1029,11 +1037,14 @@ free variables in context (above), but only the *de-refl leaves* — goals that 
 by computation (what `Eq.refl` / `by rfl` discharge).  It does **not** cover proofs
 that *use* the induction hypothesis (the actual induction step), case analysis, or
 any non-`rfl` reasoning — those are whole proofs, not single `de-refl` obligations.
-Also still open: mutual inductives; **level-generic** statements (quantified over
-`u` — the bridge monomorphises at concrete use-site levels, so a *generic* `Eq`
-goal would need level variables in `db.mm1`; distinct from the recursor's bound
-motive `u`, which *is* handled, by unification); indexed `Nat.le`; or replacing
-`src/emitter.py`'s `de-refl` shortcut in the *production* pipeline.  So this remains
+Also still open: mutual inductives; **open-level** statements — a goal mentioning a
+*free* level variable `u` (e.g. `hop.lean`'s `rewrite_refl`, a `Sort u` obligation),
+which would need genuine level variables in `db.mm1`.  (CLOSED `max`/`imax` are now
+evaluated by the bridge, above; the bridge still monomorphises poly defs at concrete
+use-site levels, so only a goal *quantified over* `u` is out of reach — distinct from
+the recursor's bound motive `u`, which *is* handled, by unification.)  Also: indexed
+`Nat.le`; or replacing `src/emitter.py`'s `de-refl` shortcut in the *production*
+pipeline.  So this remains
 a **parallel proof-of-concept** that certifies real obligations from real
 elaborated source — not the production trusted base.  (Moving βιζ + shift/subst1 out
 of the production trusted base needs that last wiring step.)

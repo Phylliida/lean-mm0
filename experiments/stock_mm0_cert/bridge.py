@@ -90,26 +90,40 @@ CONST_MAP = {
 }
 
 
-from src.levels import LZero, LSucc
+from src.levels import LZero, LSucc, LMax, LIMax
+
+
+def _eval_closed_level(l) -> int:
+    """A CLOSED level (no param / meta) -> its numeral, evaluating max / imax with
+    CIC semantics (imax a 0 = 0, else max a b).  Raises Unsupported on an open level
+    (LParam / LMeta) -- those are the genuine level-generic case (hop.lean's `u`),
+    which would need level variables in db.mm1 and stays out of fragment."""
+    if isinstance(l, LZero):  return 0
+    if isinstance(l, LSucc):  return _eval_closed_level(l.arg) + 1
+    if isinstance(l, LMax):   return max(_eval_closed_level(l.a), _eval_closed_level(l.b))
+    if isinstance(l, LIMax):
+        b = _eval_closed_level(l.b)
+        return 0 if b == 0 else max(_eval_closed_level(l.a), b)
+    raise Unsupported(f"level {l!r} (only closed lz/lS/lmax/limax supported)")
 
 
 def level_to_str(l) -> str:
-    """Translate a CIC Level to a db.mm1 level string (lz / (lS ...))."""
-    if isinstance(l, LZero):
-        return "lz"
-    if isinstance(l, LSucc):
-        return f"(lS {level_to_str(l.arg)})"
-    raise Unsupported(f"level {l!r} (only closed lz/lS towers supported)")
+    """Translate a CIC Level to a db.mm1 level string.  Closed `max`/`imax` (e.g.
+    `Pair.{1,1} : Sort (max 1 1)`) are EVALUATED to their normal-form lS-tower --
+    they are definitionally equal to a numeral, exactly as the kernel treats them,
+    so the certificate carries the reduced level directly.  (db.mm1 also has lmax /
+    limax + the leveq laws to reduce them; evaluating here keeps the MONO / inductive
+    name tags bijective, so `max 1 1` and `1` can't collide on `name_1`.)"""
+    n = _eval_closed_level(l)
+    s = "lz"
+    for _ in range(n):
+        s = f"(lS {s})"
+    return s
 
 
 def level_to_nat(l) -> int:
-    """Closed level (lS-tower over lz) -> its numeral, for sanitized def names."""
-    n = 0
-    while isinstance(l, LSucc):
-        n += 1; l = l.arg
-    if isinstance(l, LZero):
-        return n
-    raise Unsupported(f"level {l!r} (only closed lz/lS towers supported)")
+    """Closed level -> its numeral, for sanitized def / inductive names."""
+    return _eval_closed_level(l)
 
 
 # Universe-polymorphic defs are MONOMORPHISED at each concrete use-site: a def
