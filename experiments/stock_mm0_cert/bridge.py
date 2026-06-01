@@ -255,18 +255,34 @@ def _spine(e):
     return e, args
 
 
-def _db_name_of(name):
-    """db_cert const NAME for a base const appearing in an inductive's field /
-    index types.  Only already-bridged base consts are admissible here; anything
-    else raises (honest), so we never silently mistranslate a field type."""
-    if name in CONST_MAP:
-        return CONST_MAP[name].name
-    raise Unsupported(f"const {name!r} in an inductive field/index type")
+def _whnf_delta(e):
+    """δ-unfold definitions at the head (+ β) on a raw kernel Expr, so a field /
+    index type whose head is a `def` (e.g. `Not p` := `p -> False`) is exposed as
+    its unfolding before translation.  Loose BVars are fine -- this does no
+    typing, only head reduction.  Inlining keeps field types as concrete
+    structural terms (the def never enters the emitted block, so there is no
+    def-before-inductive ordering constraint)."""
+    for _ in range(10000):                       # guard a pathological def cycle
+        head, args = _spine(e)
+        if isinstance(head, E.Const) and _ENV is not None and _ENV.has(head.name) \
+           and type(_ENV.get(head.name)).__name__ == "Definition":
+            d = _ENV.get(head.name)
+            val = (E.inst_levels(d.value, tuple(d.level_params), tuple(head.levels))
+                   if d.level_params else d.value)
+            for a in args:                       # β-apply the spine args
+                val = E.beta(val.body, a) if isinstance(val, E.Lam) else E.App(val, a)
+            e = val
+            continue
+        return e
+    raise Unsupported("delta-unfolding did not terminate in a field/index type")
 
 
 def _expr_to_N(e, stack, iname):
     """kernel Expr (closed over `stack`, a list of binder names innermost-last)
-    -> an induct.N named term, for use in an induct.py inductive spec."""
+    -> an induct.N named term, for use in an induct.py inductive spec.  Defs in
+    the type are inlined (δ); references to *other* user inductives are registered
+    (so their block is emitted first) and used by their generated name."""
+    e = _whnf_delta(e)                            # inline any def at the head
     if isinstance(e, E.Sort):
         return induct.NSort(level_to_str(e.level))
     if isinstance(e, E.BVar):
@@ -281,7 +297,12 @@ def _expr_to_N(e, stack, iname):
         return induct.NApp(_expr_to_N(e.fn, stack, iname),
                            _expr_to_N(e.arg, stack, iname))
     if isinstance(e, E.Const):
-        return induct.NConst(_db_name_of(e.name))
+        if e.name in CONST_MAP:                   # already-bridged base const
+            return induct.NConst(CONST_MAP[e.name].name)
+        tc = _try_inductive_const(e.name, e.levels)   # another user inductive
+        if tc is not None:                            # (registered + emitted first)
+            return induct.NConst(tc.name)
+        raise Unsupported(f"const {e.name!r} in an inductive field/index type")
     raise Unsupported(f"inductive type node {type(e).__name__}")
 
 
@@ -291,6 +312,8 @@ def register_inductive(env, iname, levels):
     non-recursive (records: classes/structures like Add/Mul/Pair -- the dominant
     skip cluster) and, in general, the recursive/indexed shapes induct.py
     supports, provided field/index types stay within the bridged base."""
+    global _ENV
+    _ENV = env                                   # so _whnf_delta / _try_inductive_const resolve
     ind = env.get(iname)
     if type(ind).__name__ != "Inductive":
         raise Unsupported(f"{iname!r} is not an Inductive")
