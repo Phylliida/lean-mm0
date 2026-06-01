@@ -1004,18 +1004,39 @@ normal form against `src/kernel.py`'s own whnf):
   motive's normalised codomain (`inst_level`/`_codomain_sort`); and `_prove_sort`
   presents `ht_conv`'s well-formedness premise as a *literal* `esort` by normalising
   a recursor-result sort.  Both checkers accept.
+- **Free-variable de-refl obligations** (`freevar_demo.py`; in the sweep,
+  `math.lean`'s `add m (succ n) = succ (add m n)`, plus `dep_match`/`intro_seq`'s
+  `(x : T) … → Eq A k k`).  A theorem `(x₁:T₁) … (xₙ:Tₙ) → Eq A lhs rhs` that holds
+  by computation but whose sides mention the *bound* variables.  Such a goal
+  genuinely cannot be stated in `cnil`: a recursor's ι-gate must type the
+  free-variable motive/case, and `ht g (evar i) T` is provable only when `g` holds
+  the binder — so the obligation is stated in its REAL context
+  `ccons Tₙ₋₁ (… (ccons T₀ cnil))` and the certifier threads that context through
+  `whnf`/`prove_norm`/`prove_conv` and the recursor gates (`prove_rec_partial*`,
+  which had hardcoded the empty context), grounding the free variable via
+  `ht_var0`/`ht_weak`.  (The deq proof itself is context-polymorphic — every `deq_*`
+  axiom leaves `g` a metavariable — so the *reduction* is unchanged; the context is
+  threaded only for the ι-gates' `ht` sub-proofs.)  The worker peels the Pi
+  telescope, builds the context, and runs the kernel oracle under it (binders opened
+  to FVars).  `prove_ht_nat`'s closed-numeral fast path now also falls back to
+  general `ht_var0` typing when a succ-ι predecessor is itself a free variable (the
+  `succ n` in `add m (succ n)`, a two-binder case exercising `ht_var0` *and*
+  `ht_weak`).  Both checkers accept; closed obligations are byte-identical to before
+  (`cnil`), zero per-file regressions.
 
-**Still open / honest limits.**  The bridge targets *closed* `Eq` obligations
-over bridged types.  It does not yet cover: proofs with free variables (induction
-steps, abstract lemmas); mutual inductives; **level-generic** statements
-(quantified over `u` — the bridge monomorphises at concrete use-site levels, so a
-*generic* `Eq` goal would need level variables in `db.mm1`; note this is distinct
-from the recursor's bound motive `u`, which *is* handled, by unification); indexed
-`Nat.le`; or replacing `src/emitter.py`'s `de-refl` shortcut in the *production*
-pipeline.  So this remains a **parallel proof-of-concept** that certifies real
-obligations from real elaborated source — not the production trusted base.
-(Moving βιζ + shift/subst1 out of the production trusted base needs that last
-wiring step.)
+**Still open / honest limits.**  The bridge now certifies `Eq` obligations with
+free variables in context (above), but only the *de-refl leaves* — goals that hold
+by computation (what `Eq.refl` / `by rfl` discharge).  It does **not** cover proofs
+that *use* the induction hypothesis (the actual induction step), case analysis, or
+any non-`rfl` reasoning — those are whole proofs, not single `de-refl` obligations.
+Also still open: mutual inductives; **level-generic** statements (quantified over
+`u` — the bridge monomorphises at concrete use-site levels, so a *generic* `Eq`
+goal would need level variables in `db.mm1`; distinct from the recursor's bound
+motive `u`, which *is* handled, by unification); indexed `Nat.le`; or replacing
+`src/emitter.py`'s `de-refl` shortcut in the *production* pipeline.  So this remains
+a **parallel proof-of-concept** that certifies real obligations from real
+elaborated source — not the production trusted base.  (Moving βιζ + shift/subst1 out
+of the production trusted base needs that last wiring step.)
 
 **Reproduce — and how the numbers are sourced.**  This section deliberately
 states *capabilities, not counts*: figures (proof-node sizes, how many
@@ -1029,6 +1050,8 @@ experiment `README.md`):
   `bridge_eq_demo.py`, `bridge_vec_demo.py`, `bridge_delta_demo.py` (δ),
   `bridge_poly_demo.py` (universe-poly), `bridge_struct_demo.py`
   (classes/structures — also surfaces the param-level gap on `arith.lean`),
+  `freevar_demo.py` (free-variable de-refl obligations, e.g.
+  `(m n : Nat) → add m (succ n) = succ (add m n)`),
   `run_levels.py`, `capstone_demo.py`.
 - whole-suite coverage: `python3 coverage_sweep.py` — runs `coverage_worker.py`
   over every `examples/*.lean` (subprocess per file, detector = `Eq A` over any

@@ -152,18 +152,24 @@ def _app_cong(cf, ca):
     if cf is None and ca is None: return None
     return f"(deq_app {cf or '(deq_refl)'} {ca or '(deq_refl)'})"
 
-def whnf(e: T):
-    """Weak-head reduce; return (wh, conv|None) with conv proving deq cnil e wh."""
+def whnf(e: T, ctx=None):
+    """Weak-head reduce; return (wh, conv|None) with conv proving deq G e wh.
+    `ctx` (de-Bruijn binder types, innermost LAST) is threaded ONLY so the iota
+    gates below can type a recursor's motive/cases in the real context when they
+    mention free variables (ht_var0/ht_weak); the deq proof itself is context-
+    polymorphic (every deq_* axiom leaves g a metavariable), so reduction is
+    unchanged.  Defaults to the empty context, so closed callers are untouched."""
+    if ctx is None: ctx = []
     if isinstance(e, Const) and e.name in DEFS:
-        return whnf(DEFS[e.name])           # delta: unfold def -> body (free via
+        return whnf(DEFS[e.name], ctx)      # delta: unfold def -> body (free via
                                             # mm0 def-unfold; proof stays about body)
     if not isinstance(e, App):
         return e, None
-    f_wh, cf = whnf(e.f)
+    f_wh, cf = whnf(e.f, ctx)
     cong_f = _app_cong(cf, None) if cf else None
     if isinstance(f_wh, Lam):                       # beta redex
         b2, psub = prove_sub(f_wh.body, e.a, 0)
-        wr, cr = whnf(b2)
+        wr, cr = whnf(b2, ctx)
         return wr, _trans(cong_f, _trans(f"(deq_beta {psub})", cr))
     g = App(f_wh, e.a)
     head, args = uncurry(g)
@@ -174,20 +180,20 @@ def whnf(e: T):
         # unreduced recursor app, and the succ-iota gate prove_ht_nat(K) needs a
         # LITERAL numeral.  prove_norm reduces the major to succ^n zero, so the
         # predecessor k below is always a literal.  Fixes nested Nat.add.
-        mj, cmj = prove_norm(major)
+        mj, cmj = prove_norm(major, ctx)
         cong_mj = f"(deq_app (deq_refl) {cmj})" if cmj else None
         if mj is TZERO:
-            gate = prove_rec_partial(C, z, s)        # ht (trec@C@z@s) (Pi m, C m)
-            wz, cz = whnf(z)
+            gate = prove_rec_partial(C, z, s, ctx)   # ht (trec@C@z@s) (Pi m, C m)
+            wz, cz = whnf(z, ctx)
             iota = f"(deq_iota_zero {gate})"
             return wz, _trans(cong_f, _trans(cong_mj, _trans(iota, cz)))
         if isinstance(mj, App) and mj.f is TSUCC:
             k = mj.a
-            gate = prove_rec_partial(C, z, s)
-            hk = prove_ht_nat(k)                      # ht k tnat
+            gate = prove_rec_partial(C, z, s, ctx)
+            hk = _ht_as_nat(k, ctx)                   # ht g k tnat (k numeral OR free var)
             iota = f"(deq_iota_succ {gate} {hk})"
             contractum = App(App(s, k), curry(TREC, [C, z, s, k]))
-            wc, cc = whnf(contractum)
+            wc, cc = whnf(contractum, ctx)
             return wc, _trans(cong_f, _trans(cong_mj, _trans(iota, cc)))
     # general (generated) inductive recursor.  Application layout:
     #   rec @ params(P) @ C @ minors(k) @ indices(I) @ major
@@ -201,7 +207,7 @@ def whnf(e: T):
             C = args[P]
             minors = args[P + 1:P + 1 + k]
             major = args[P + 1 + k + I]
-            mj, cmj = whnf(major)
+            mj, cmj = whnf(major, ctx)
             cong_mj = f"(deq_app (deq_refl) {cmj})" if cmj else None
             mh, fargs = uncurry(mj)        # fargs = params(P) ++ fields
             if isinstance(mh, Const) and mh.name in CTOR_IX \
@@ -211,8 +217,8 @@ def whnf(e: T):
                 if len(fargs) == P + len(c.fields):
                     cfields = fargs[P:]
                     rec_prefix = list(params) + [C] + list(minors)
-                    gate1 = prove_rec_partial_gen(ind, params, C, minors)
-                    _t, gate2 = prove_ht(curry(Const(mh.name), fargs), [])
+                    gate1 = prove_rec_partial_gen(ind, params, C, minors, ctx)
+                    _t, gate2 = prove_ht(curry(Const(mh.name), fargs), ctx)
                     iota = f"(deq_iota_{mh.name} {gate1} {gate2})"
                     contr = curry(minors[cidx], cfields)
                     # recursive calls use each rec field's OWN index values (e.g.
@@ -223,22 +229,25 @@ def whnf(e: T):
                             idxs = rc_map[i]
                             contr = App(contr,
                                         curry(head, rec_prefix + idxs + [cfields[i]]))
-                    wc, cc = whnf(contr)
+                    wc, cc = whnf(contr, ctx)
                     return wc, _trans(cong_f, _trans(cong_mj, _trans(iota, cc)))
     return g, cong_f
 
-def prove_norm(e: T):
-    """Full normal form; return (nf, conv|None) proving deq cnil e nf.
-    Reduces under binders too (via deq_lam / deq_pi congruence)."""
-    wh, c1 = whnf(e)
+def prove_norm(e: T, ctx=None):
+    """Full normal form; return (nf, conv|None) proving deq G e nf.
+    Reduces under binders too (via deq_lam / deq_pi congruence); `ctx` is extended
+    under each binder so a body's reductions type their gates in the right context.
+    Defaults to the empty context, so closed callers are untouched."""
+    if ctx is None: ctx = []
+    wh, c1 = whnf(e, ctx)
     if isinstance(wh, App):
-        f2, cf = prove_norm(wh.f); a2, ca = prove_norm(wh.a)
+        f2, cf = prove_norm(wh.f, ctx); a2, ca = prove_norm(wh.a, ctx)
         return App(f2, a2), _trans(c1, _app_cong(cf, ca))
     if isinstance(wh, Lam):
-        t2, ct = prove_norm(wh.ty); b2, cb = prove_norm(wh.body)
+        t2, ct = prove_norm(wh.ty, ctx); b2, cb = prove_norm(wh.body, ctx + [wh.ty])
         return Lam(t2, b2), _trans(c1, _deq_lam(ct, cb))
     if isinstance(wh, EPi):
-        d2, cd = prove_norm(wh.dom); b2, cb = prove_norm(wh.body)
+        d2, cd = prove_norm(wh.dom, ctx); b2, cb = prove_norm(wh.body, ctx + [wh.dom])
         return EPi(d2, b2), _trans(c1, _deq_pi(cd, cb))
     return wh, c1
 
@@ -252,19 +261,24 @@ def _deq_lam(cd, cb):
     if cd is None and cb is None: return None
     return f"(deq_lam {cd or '(deq_refl)'} {cb or '(deq_refl)'})"
 
-def prove_conv(A: T, B: T):
-    """Proof of  deq g A B  (None = refl), assuming A and B are convertible."""
-    nfa, ca = whnf(A); nfb, cb = whnf(B)
-    return _trans(ca, _trans(_conv_structural(nfa, nfb), _sym(cb)))
+def prove_conv(A: T, B: T, ctx=None):
+    """Proof of  deq G A B  (None = refl), assuming A and B are convertible.
+    `ctx` is threaded so whnf's iota gates type free-variable motives/cases in the
+    real context; defaults to empty, so closed callers are untouched."""
+    if ctx is None: ctx = []
+    nfa, ca = whnf(A, ctx); nfb, cb = whnf(B, ctx)
+    return _trans(ca, _trans(_conv_structural(nfa, nfb, ctx), _sym(cb)))
 
-def _conv_structural(A: T, B: T):
+def _conv_structural(A: T, B: T, ctx):
     if A == B: return None
     if isinstance(A, EPi) and isinstance(B, EPi):
-        return _deq_pi(prove_conv(A.dom, B.dom), prove_conv(A.body, B.body))
+        return _deq_pi(prove_conv(A.dom, B.dom, ctx),
+                       prove_conv(A.body, B.body, ctx + [A.dom]))
     if isinstance(A, Lam) and isinstance(B, Lam):
-        return _deq_lam(prove_conv(A.ty, B.ty), prove_conv(A.body, B.body))
+        return _deq_lam(prove_conv(A.ty, B.ty, ctx),
+                        prove_conv(A.body, B.body, ctx + [A.ty]))
     if isinstance(A, App) and isinstance(B, App):
-        return _app_cong(prove_conv(A.f, B.f), prove_conv(A.a, B.a))
+        return _app_cong(prove_conv(A.f, B.f, ctx), prove_conv(A.a, B.a, ctx))
     if isinstance(A, ESort) and isinstance(B, ESort):
         return f"(deq_sort {prove_leveq(A.lvl, B.lvl)})"
     raise ValueError(f"cannot convert:\n  {pp(A)}\n  {pp(B)}")
@@ -317,7 +331,7 @@ def prove_ht(e: T, ctx):
             # a function's type can be a stuck redex -- e.g. a recursor's result
             # type `C @ major` (C a lambda).  whnf it to expose the Pi, coercing
             # the proof across that (beta/delta/iota) conversion via ht_conv.
-            nf, _c = whnf(tf)
+            nf, _c = whnf(tf, ctx)
             if isinstance(nf, EPi):
                 pf = _coerce(pf, tf, nf, ctx); tf = nf
         assert isinstance(tf, EPi), f"applying non-Pi {pp(tf)}"
@@ -348,11 +362,11 @@ def _coerce(proof, have, want, ctx):
         # Fail-safe: if the param isn't actually a bound metavar at the use site,
         # MM0 rejects the cert (both-checkers invariant) -- never a false accept.
         return proof
-    nf_have, cnf = prove_norm(have)                   # have may hide a param match
+    nf_have, cnf = prove_norm(have, ctx)              # have may hide a param match
     if nf_have != have and _levels_unify(nf_have, want):  # behind an unreduced redex
         want_sort = _prove_sort(nf_have, ctx)
         return f"(ht_conv {proof} {cnf or '(deq_refl)'} {want_sort})"
-    conv = prove_conv(have, want)
+    conv = prove_conv(have, want, ctx)
     want_sort = _prove_sort(want, ctx)                # ht ctx want (esort k)
     return f"(ht_conv {proof} {conv or '(deq_refl)'} {want_sort})"
 
@@ -365,7 +379,7 @@ def _prove_sort(B: T, ctx) -> str:
     tB, pB = prove_ht(B, ctx)
     if isinstance(tB, ESort):
         return pB
-    nf, c = prove_norm(tB)
+    nf, c = prove_norm(tB, ctx)
     if isinstance(nf, ESort):
         _u, sortp = prove_ht(nf, ctx)                 # ht ctx (esort k) (esort (lS k))
         return f"(ht_conv {pB} {c or '(deq_refl)'} {sortp})"
@@ -428,30 +442,33 @@ def _codomain_sort(t: T) -> str:
 _SUCC_CASE = EPi(TNAT, EPi(App(Var(2), Var(0)), App(Var(3), App(TSUCC, Var(1)))))
 _R0 = EPi(App(Var(0), TZERO), EPi(_SUCC_CASE, EPi(TNAT, App(Var(3), Var(0)))))
 
-def prove_rec_partial(cC: T, z: T, s: T) -> str:
-    tcC, pcC = prove_ht(cC, [])                        # cC : epi tnat (esort u)
+def prove_rec_partial(cC: T, z: T, s: T, ctx=None) -> str:
+    if ctx is None: ctx = []
+    tcC, pcC = prove_ht(cC, ctx)                       # cC : epi tnat (esort u)
     R0sub, sub1 = prove_sub(_R0, cC, 0)                # R0[cC/0]
     p1 = f"(ht_app (ht_rec) {pcC} {sub1})"
-    tz, pz = prove_ht(z, [])
-    pz = _coerce(pz, tz, R0sub.dom, [])               # z : cC 0
+    tz, pz = prove_ht(z, ctx)
+    pz = _coerce(pz, tz, R0sub.dom, ctx)              # z : cC 0
     rest1 = R0sub.body
     rest1sub, sub2 = prove_sub(rest1, z, 0)
     p2 = f"(ht_app {p1} {pz} {sub2})"
-    ts, ps = prove_ht(s, [])
-    ps = _coerce(ps, ts, rest1sub.dom, [])            # s : Pi n, cC n -> cC (succ n)
+    ts, ps = prove_ht(s, ctx)
+    ps = _coerce(ps, ts, rest1sub.dom, ctx)           # s : Pi n, cC n -> cC (succ n)
     _r3, sub3 = prove_sub(rest1sub.body, s, 0)
     return f"(ht_app {p2} {ps} {sub3})"
 
-def prove_rec_partial_gen(ind, params, C: T, minors) -> str:
+def prove_rec_partial_gen(ind, params, C: T, minors, ctx=None) -> str:
     """ht g (<rec> @ params @ C @ minors...) (Pi x:(T params), C x).
     MONOMORPHISE the recursor type at u := k (read off C's normalised codomain),
-    so no param level reaches the normaliser; MM0 unifies the axiom's bound u."""
-    tC, pC = prove_ht(C, [])
-    nf_tC, cC = prove_norm(tC)
+    so no param level reaches the normaliser; MM0 unifies the axiom's bound u.
+    `ctx` types the motive/minors when they mention free variables."""
+    if ctx is None: ctx = []
+    tC, pC = prove_ht(C, ctx)
+    nf_tC, cC = prove_norm(tC, ctx)
     k = _codomain_sort(nf_tC)
     rec_type = inst_level(ind.rec_type, "u", k)
     if nf_tC != tC:
-        _s, sortp = prove_ht(nf_tC, [])
+        _s, sortp = prove_ht(nf_tC, ctx)
         pC = f"(ht_conv {pC} {cC or '(deq_refl)'} {sortp})"; tC = nf_tC
     p = f"(ht_{ind.rec_name})"
     cur = rec_type
@@ -459,10 +476,10 @@ def prove_rec_partial_gen(ind, params, C: T, minors) -> str:
          + [(m, None) for m in minors]
     for arg, pre in plan:
         if pre is None:
-            targ, parg = prove_ht(arg, [])
+            targ, parg = prove_ht(arg, ctx)
         else:
             parg, targ = pre
-        parg = _coerce(parg, targ, cur.dom, [])
+        parg = _coerce(parg, targ, cur.dom, ctx)
         res, subp = prove_sub(cur.body, arg, 0)
         p = f"(ht_app {p} {parg} {subp})"
         cur = res
@@ -475,6 +492,17 @@ def prove_ht_nat(e: T) -> str:
     if isinstance(e, App) and e.f is TSUCC:
         return f"(ht_app (ht_succ) {prove_ht_nat(e.a)} (sub_nat))"
     raise ValueError(f"not a numeral: {pp(e)}")
+
+def _ht_as_nat(k: T, ctx) -> str:
+    """Proof of  ht g k tnat.  Closed numerals take the lean context-free fast
+    path (prove_ht_nat, preserving existing proof shapes); a succ-iota predecessor
+    that is a FREE VARIABLE (e.g. `add m (succ n)` with n abstract) is typed in the
+    real context instead (ht_var0/ht_weak), coerced to tnat."""
+    try:
+        return prove_ht_nat(k)
+    except ValueError:
+        tk, pk = prove_ht(k, ctx)
+        return _coerce(pk, tk, TNAT, ctx)
 
 def proof_nodes(proof: str) -> int:
     import re

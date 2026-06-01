@@ -86,6 +86,30 @@ def eq_obligation(ty):
     return None
 
 
+def peel_pis(ty):
+    """Strip leading Pi binders.  Returns (tele, body) where tele is a list of
+    (binder, dom) OUTERMOST-FIRST in de Bruijn (dom may mention earlier binders
+    as BVars), and body is the Pi-free remainder.  A theorem like
+    `(n : Nat) -> Eq Nat (n+0) n` has its free-variable `n` in the telescope; the
+    closed case (no Pi) returns an empty tele, identical to the old direct path."""
+    tele = []
+    while isinstance(ty, E.Pi):
+        tele.append((ty.binder, ty.dom)); ty = ty.body
+    return tele, ty
+
+
+def open_pis(ty):
+    """Iterated open of the leading Pis into FRESH FVars, for the kernel oracle.
+    Returns (LocalCtx, body) with body's telescope BVars replaced by FVars.  Each
+    domain is opened w.r.t. the FVars already introduced (dependent telescopes)."""
+    ctx = LocalCtx()
+    while isinstance(ty, E.Pi):
+        dom = ty.dom                       # already opened wrt earlier fvars
+        name = ctx.push(ty.binder or "x", dom)
+        ty = E.open_(ty.body, E.FVar(name, dom))
+    return ctx, ty
+
+
 def _reason(prefix, ex):
     """Compact, csv-safe skip tag carrying WHAT failed, not just the class:
     prefer a quoted name from the message (e.g. unsup:Add.add), else its first
@@ -123,32 +147,45 @@ def main():
         except Exception:
             continue
         ty = getattr(d, "type_", None)
-        sides = eq_obligation(ty) if ty is not None else None
+        if ty is None:
+            continue
+        tele, body = peel_pis(ty)             # free-var telescope + Pi-free body
+        sides = eq_obligation(body)
         if sides is None:
             continue                          # not an obligation; don't count
-        A, lhs, rhs = sides
+        A, lhs, rhs = sides                   # de Bruijn (loose BVars -> telescope)
         try:
             # ORACLE: the real kernel must agree both sides convert (same normal
-            # form).  This is the de-refl obligation Eq.refl was discharging.
-            kl = kernel_nf(K, lhs); kr = kernel_nf(K, rhs)
+            # form), UNDER the telescope's free variables (opened to FVars).  This
+            # is the de-refl obligation Eq.refl was discharging.
+            octx, obody = open_pis(ty)
+            _Ao, olhs, orhs = eq_obligation(obody)
+            kl = kernel_nf(K, olhs, octx); kr = kernel_nf(K, orhs, octx)
             if kl != kr:
                 skipped.append("not-convertible"); continue
-            val = numval(kl)                  # may be None (common nf not a numeral)
+            val = numval(kl)                  # may be None (free var / not a numeral)
             for c in sorted(consts_in(lhs, set()) | consts_in(rhs, set())):
                 if env.has(c) and type(env.get(c)).__name__ == "Definition" \
                    and not env.get(c).level_params:
                     bridge.register_def(env, c)
+            gctx = [bridge.to_db(dom) for _bn, dom in tele]   # innermost LAST
             dl = bridge.to_db(lhs); dr = bridge.to_db(rhs)
-            # CONVERSION cert: normalise BOTH sides and bridge (prove_conv =
-            # deq_trans(norm lhs, sym(norm rhs))).  This handles an rhs that is
-            # itself a computation (e.g. add 5 3 = succ (add 4 3)), which the old
-            # "nf(lhs) == raw(rhs)" check wrongly rejected as nf-mismatch.
-            conv = db_cert.prove_conv(dl, dr) or "(deq_refl)"
+            # context expr: the innermost binder is the OUTERMOST ccons (matches
+            # ht_pi); cnil when tele is empty, so closed obligations are
+            # byte-identical to before.
+            G = "cnil"
+            for dom in gctx:
+                G = f"(ccons {db_cert.pp(dom)} {G})"
+            # CONVERSION cert in the real context G, so whnf's iota gates can type a
+            # free-variable motive/case via ht_var0/ht_weak.  prove_conv =
+            # deq_trans(norm lhs, sym(norm rhs)); handles an rhs that is itself a
+            # computation (e.g. add 5 3 = succ (add 4 3)).
+            conv = db_cert.prove_conv(dl, dr, gctx) or "(deq_refl)"
             # faithfulness: db_cert agrees both sides reduce to the same nf
-            nfa, _ = db_cert.prove_norm(dl); nfb, _ = db_cert.prove_norm(dr)
+            nfa, _ = db_cert.prove_norm(dl, gctx); nfb, _ = db_cert.prove_norm(dr, gctx)
             if db_cert.pp(nfa) != db_cert.pp(nfb):
                 skipped.append("bridge-nf-mismatch"); continue
-            certified.append((name, val, db_cert.pp(dl), db_cert.pp(dr), conv,
+            certified.append((name, val, G, db_cert.pp(dl), db_cert.pp(dr), conv,
                               db_cert.proof_nodes(conv)))
         except bridge.Unsupported as ex:
             skipped.append(_reason("unsup", ex))
@@ -164,8 +201,8 @@ def main():
     if certified:
         prelude  = open(f"{HERE}/db.mm1").read()
         defblock = db_cert.gen_def_block()
-        thms = [f"theorem cov_{i}: $ deq cnil {dl} {dr} $ =\n'{conv};\n"
-                for i, (nm, val, dl, dr, conv, nodes) in enumerate(certified)]
+        thms = [f"theorem cov_{i}: $ deq {G} {dl} {dr} $ =\n'{conv};\n"
+                for i, (nm, val, G, dl, dr, conv, nodes) in enumerate(certified)]
         # bridge.IND_EMITTED holds blocks for any user inductive (class/structure)
         # auto-derived during this file's certification; they must precede the
         # defblock (projections/instances) that reference them.
