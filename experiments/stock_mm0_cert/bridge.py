@@ -299,16 +299,45 @@ def register_def(env, name, levels=()):
 
 
 def register_opaque(env, name):
-    """Register a `theorem` (an OPAQUE proof) as an opaque lemma: it is emitted as
-    an mm0 def + a once-checked `htop_<name>` typing theorem (db_cert.gen_opaque_block),
-    and every USE of it types by reference -- the body is never re-typed.  This is
-    what lets modular proof chains scale (the kernel marks lemmas opaque for exactly
-    this reason), and it adds NO trusted axiom: the lemma's typing is *proved*
-    (g-polymorphic, since a closed body's typing never pins the context).
+    r"""Register a `theorem` (an OPAQUE proof) as an opaque lemma, so a proof that
+    CITES it can be certified.  Emitted as an mm0 def + a once-checked
+    `htop_<name>` typing theorem (db_cert.gen_opaque_block); every USE of the lemma
+    types by REFERENCE to that theorem -- the body is never re-typed.
+
+    WHY THIS SHAPE -- the two roads not taken, and why the third is right:
+
+    (1) INLINE the body (treat the theorem like a `def`, register_def-style).
+        Sound, and trivial to write.  But WRONG on purpose: a `theorem` is opaque
+        precisely so a proof chain stays cheap -- the kernel never delta-unfolds a
+        lemma, so it is checked once, not re-normalised at every call site (this is
+        the >25min -> 5s difference on mul_comm noted in HANDOFF).  Inlining
+        reintroduces exactly that super-linear blow-up: a lemma cited k times would
+        be typed k times, and nested chains explode.  So inlining defeats the entire
+        reason `theorem` exists.
+
+    (2) ASSERT the typing with a trusted axiom  `ht_opaque (g)(e body T):
+        deq g e body > ht g e T`  (and apply it with e := the lemma).  This is the
+        tempting one-liner.  But it is UNSOUND: db.mm1's `deq` is UNTYPED, so it
+        does not imply the converted term is well-typed.  Subject conversion fails --
+        e.g.  (\x:T. body) junk  ==(beta) body  for ARBITRARY junk, so the axiom
+        would yield  ht g ((\x.body) junk) T  with junk ill-typed.  An unsound axiom
+        in the (shared, trusted) base would let a WRONG cert be accepted, breaking
+        the both-checkers invariant.  So we must not add it.
+
+    (3) PROVE the typing once, reference it -- what we do.  Emit
+        `htop_<name> (g: ctx): ht g <body> <type>`  whose proof is db_cert.prove_ht
+        of the body.  No trusted axiom: the lemma's typing is *derived*.  It works
+        because a CLOSED body's typing proof is CONTEXT-POLYMORPHIC -- the only rules
+        that mention the context concretely are ht_var0/ht_weak (free variables), and
+        a closed body has none referring to the outer context (its own binders use
+        ht_var0 against `ccons _ g`, leaving the outer g a metavariable).  So the one
+        `htop` theorem, with g bound, is valid at EVERY use site in any context.
+        That is the stock-MM0 analogue of the production verifier's dedicated
+        opaque-def-typing rule -- but reached with db.mm1 unchanged.
 
     Monomorphic only: a universe-polymorphic lemma's `htop` would need level binders
-    (the typing axioms already bind levels, but threading them through a cached
-    reference is a further step), so a poly theorem stays Unsupported here."""
+    (threading them through the cached reference is a further step), so a poly
+    theorem stays Unsupported here."""
     global _ENV
     _ENV = env
     d = env.get(name)

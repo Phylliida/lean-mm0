@@ -321,8 +321,12 @@ def prove_ht(e: T, ctx):
     if isinstance(e, Const):
         # compare by NAME, not identity: a `tnat` inside a generated schema is a
         # fresh Const("tnat"), not the module singleton TNAT.
-        if e.name in OPAQUE:                                       # opaque lemma:
-            return OPAQUE[e.name][0], f"(htop_{e.name})"          # type by reference
+        if e.name in OPAQUE:                          # opaque lemma: type by REFERENCE
+            # cite the once-proved `htop_<name>`, do NOT re-type the body -- re-typing
+            # at every use is the super-linear blow-up `theorem`/opacity exists to
+            # avoid.  Sound with no trusted axiom; see bridge.register_opaque for why
+            # this beats inlining (blow-up) and an asserted ht-axiom (unsound).
+            return OPAQUE[e.name][0], f"(htop_{e.name})"
         if e.name in DEFS:    return prove_ht(DEFS[e.name], ctx)   # delta: type via body
         if e.name == "tnat":  return ESort("(lS lz)"), "(ht_nat)"
         if e.name == "tzero": return TNAT, "(ht_zero)"
@@ -555,7 +559,13 @@ def gen_opaque_block() -> str:
     context).  A use of the lemma references `(htop_<name>)` -- the body is never
     re-typed -- which is what makes modular proof chains scale (the kernel's whole
     reason for `theorem`/opaque-def).  Insertion order is dependency order (a
-    lemma is registered after the lemmas its body cites)."""
+    lemma is registered after the lemmas its body cites).
+
+    See bridge.register_opaque for the full reasoning: why this beats INLINING
+    (reintroduces the super-linear blow-up opacity exists to avoid) and why an
+    asserted `ht g L T` axiom would be UNSOUND (untyped deq breaks subject
+    conversion).  The trick that needs no trusted axiom: a closed body's typing
+    proof is context-polymorphic, so one `htop` theorem serves every use site."""
     out = []
     for name, (ty, body, proof) in OPAQUE.items():
         out.append(f"def {name}: expr = $ {pp(body)} $;")
