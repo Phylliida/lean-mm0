@@ -56,14 +56,22 @@ def _reason(prefix, ex):
 
 
 def main():
-    fname = sys.argv[1]
+    # Accept a CHAIN of files: the last is the target (its decls are certified); any
+    # earlier ones are PREREQUISITES, elaborated as context only (some examples build on
+    # decls another file introduces -- e.g. `nat_lemmas` uses `math`'s `succ_add`).  A
+    # single file is the common case (no prereqs).  Mirrors the legacy test harness's
+    # `_run_example(*files)` so the stock verifier covers the chained examples too.
+    files = sys.argv[1:]
+    fname = files[-1]
     base = os.path.basename(fname)
 
     try:
         env = Env(); build_stdlib(env)
         blocks = (induct.generate(BOOL_P) + "\n" + induct.generate(induct.LIST) + "\n"
                   + induct.generate(induct.EQ) + "\n" + induct.generate(induct.VEC) + "\n")
-        added = elaborate(open(fname).read(), env)
+        for prereq in files[:-1]:                  # prerequisites: context, not certified
+            elaborate(open(prereq).read(), env)
+        added = elaborate(open(fname).read(), env)  # target: its decls are certified
         bridge.bind_env(env)
     except Exception as ex:
         open("/tmp/envfail_%s.txt" % base, "w").write(traceback.format_exc())

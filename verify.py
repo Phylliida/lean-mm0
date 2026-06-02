@@ -21,15 +21,61 @@ its globals reset between files); this front end presents the verdict.
 
 Usage:
     python3 verify.py FILE.lean [FILE.lean ...]
-    python3 verify.py --all          # verify every examples/*.lean
+    python3 verify.py --all          # verify every examples/*.lean (standalone)
+    python3 verify.py --all --chain  # also chain each file's prerequisites (parity
+                                     #   attempt; reaches more files, but currently
+                                     #   surfaces a few certifier gaps -- see HANDOFF)
 
-Exit status is non-zero if any file is REJECTED by a checker.
+Exit status is non-zero if any file is REJECTED by a checker.  (`--all` without
+`--chain` is the green no-regression gate run by run_all.py; ~19 examples don't
+elaborate standalone — a build_stdlib harness gap, reported as skipped not failed.)
 """
 import os, re, sys, subprocess
 
 HERE   = os.path.dirname(os.path.abspath(__file__))
 ENGINE = f"{HERE}/experiments/stock_mm0_cert/envcert_worker.py"
 EXAMPLES = f"{HERE}/examples"
+
+# Some examples build on declarations another file introduces (e.g. `nat_lemmas` uses
+# `math`'s `succ_add`).  These CHAINS mirror the legacy test harness's `_run_example`
+# calls (tests/test_parser.py): each tuple is (prereq..., target) -- the prereqs are
+# elaborated as context, the target's decls are certified.  Used by `--all` so the
+# stock verifier covers the chained examples too (parity with the legacy path).
+CHAINS = [
+    ("math", "have"),
+    ("math", "nat_lemmas"),
+    ("math", "nat_lemmas", "bool_ops", "list_ops", "induction"),
+    ("math", "nat_lemmas", "list_ops", "list_theorems"),
+    ("math", "nat_lemmas", "nat_mul"),
+    ("math", "nat_lemmas", "revert"),
+    ("math", "nat_lemmas", "simp"),
+    ("nat_inj", "index_unif"),
+    ("nat_inj", "nat_dec_eq"),
+    ("nat_inj", "nat_dec_eq", "bool_dec_eq", "list_dec_eq_poly", "decidable_compose",
+     "list_mem", "decidable_eq", "decidable_eq_chain"),
+    ("nat_inj", "nat_dec_eq", "decidable_compose", "list_mem"),
+    ("nat_inj", "nat_dec_eq", "decidable_compose", "list_mem", "decidable_eq"),
+    ("nat_inj", "nat_dec_eq", "list_dec_eq"),
+    ("nat_inj", "nat_dec_eq", "list_dec_eq_poly"),
+    ("nat_inj", "nat_dec_eq", "option_ops"),
+    ("nat_le", "nat_lt"),
+    ("nat_le", "nat_lt", "nat_le_more"),
+    ("nat_inj", "nat_le", "nat_lt", "nat_le_more", "index_unif", "nat_le_chain"),
+    ("nat_inj", "nat_le", "nat_lt", "nat_le_more", "index_unif", "nat_le_chain", "nat_dec_le"),
+]
+# target stem -> prerequisite stems (the longest chain in which it is the target).
+DEPS = {}
+for _chain in CHAINS:
+    _t, _pre = _chain[-1], list(_chain[:-1])
+    if len(_pre) > len(DEPS.get(_t, [])):
+        DEPS[_t] = _pre
+
+
+def _chain_for(path):
+    """Full file-path chain (prereqs + target) for an examples/ file, [path] otherwise."""
+    stem = os.path.basename(path)[:-5] if path.endswith(".lean") else os.path.basename(path)
+    pre = DEPS.get(stem, [])
+    return [f"{EXAMPLES}/{p}.lean" for p in pre] + [path]
 
 GREEN, YELLOW, RED, DIM, BOLD, OFF = (
     "\033[32m", "\033[33m", "\033[31m", "\033[2m", "\033[1m", "\033[0m")
@@ -45,10 +91,11 @@ def _gs(line, key):
     return m.group(1) if m else "-"
 
 
-def verify_one(path):
-    """Run the engine on one file; return (status, detail) where status is one of
-    'verified' / 'partial' / 'rejected' / 'elab-fail' / 'empty'."""
-    r = subprocess.run([sys.executable, ENGINE, path], capture_output=True, text=True)
+def verify_one(chain):
+    """Run the engine on a file chain (prereqs..., target); the target's decls are
+    certified.  A single-element chain is the common standalone case.  Returns
+    (status, detail) with status in verified/partial/rejected/elab-fail/empty."""
+    r = subprocess.run([sys.executable, ENGINE, *chain], capture_output=True, text=True)
     line = next((l for l in r.stdout.splitlines() if l.startswith("RESULT ")), "")
     if not line:
         return "rejected", {"msg": (r.stderr or r.stdout or "engine produced no result")[-400:]}
@@ -92,15 +139,19 @@ def _print(path, status, d):
 
 def main():
     args = sys.argv[1:]
+    chained = "--chain" in args                  # chain in each file's prerequisites
+    args = [a for a in args if a != "--chain"]
     if not args:
         print(__doc__); sys.exit(2)
+    do_all = (args == ["--all"])
     files = (sorted(f"{EXAMPLES}/{f}" for f in os.listdir(EXAMPLES) if f.endswith(".lean"))
-             if args == ["--all"] else args)
+             if do_all else args)
 
     counts = {"verified": 0, "partial": 0, "rejected": 0, "elab-fail": 0, "empty": 0}
     all_axioms = set()
     for path in files:
-        status, d = verify_one(path)
+        chain = _chain_for(path) if chained else [path]
+        status, d = verify_one(chain)
         counts[status] += 1
         if status in ("verified", "partial") and d.get("axioms", "-") not in ("-", ""):
             all_axioms.update(d["axioms"].split(","))
