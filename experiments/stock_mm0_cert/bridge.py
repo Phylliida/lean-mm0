@@ -299,11 +299,9 @@ def register_def(env, name, levels=()):
                 return ref
             try:                                          # body bridged in the def's OWN
                 _register_mono_deps(env, name, d.value)   # params (-> lv_u), level-generic
-                db_cert.DEFS[san] = to_db(d.value)
-                db_cert.DEFS_LVLS[san] = canon
+                db_cert.add_def(san, to_db(d.value), canon)
             except Exception:
-                MONO.pop(key, None); db_cert.DEFS.pop(san, None)
-                db_cert.DEFS_LVLS.pop(san, None); raise
+                MONO.pop(key, None); db_cert._unregister("def", san); raise
             return ref
 
         body = E.inst_levels(d.value, d.level_params, tuple(levels))   # concrete: monomorphise
@@ -311,9 +309,9 @@ def register_def(env, name, levels=()):
         MONO[key] = TConst(san)              # placeholder first (breaks cycles)
         try:                                 # ...but roll it back on failure, so a
             _register_mono_deps(env, name, body)         # partial registration can't
-            db_cert.DEFS[san] = to_db(body)  # poison later obligations with a body-
-        except Exception:                    # less const (each oblig fails on its own
-            MONO.pop(key, None); db_cert.DEFS.pop(san, None); raise   # true reason)
+            db_cert.add_def(san, to_db(body))            # poison later obligations
+        except Exception:
+            MONO.pop(key, None); db_cert._unregister("def", san); raise
         return MONO[key]
 
     if name in CONST_MAP:                     # monomorphic
@@ -323,9 +321,9 @@ def register_def(env, name, levels=()):
     CONST_MAP[name] = TConst(san)            # placeholder first (so to_db maps name -> san)
     try:                                     # atomic: roll back on failure (see poly path)
         _register_mono_deps(env, name, body)
-        db_cert.DEFS[san] = to_db(body)
+        db_cert.add_def(san, to_db(body))
     except Exception:
-        CONST_MAP.pop(name, None); db_cert.DEFS.pop(san, None); raise
+        CONST_MAP.pop(name, None); db_cert._unregister("def", san); raise
     return CONST_MAP[name]
 
 
@@ -410,9 +408,9 @@ def register_opaque(env, name, levels=()):
                 bodyd = to_db(d.value)
                 tb, pb = db_cert.prove_ht(bodyd, [])
                 proof  = db_cert._coerce(pb, tb, tyd, [])
-                db_cert.OPAQUE[san] = (tyd, bodyd, proof, canon)
+                db_cert.add_opaque(san, tyd, bodyd, proof, canon)
             except Exception:
-                MONO.pop(key, None); db_cert.OPAQUE.pop(san, None); raise
+                MONO.pop(key, None); db_cert._unregister("opaque", san); raise
             return ref
 
         san = sanitize(name) + "_" + "_".join(str(level_to_nat(l)) for l in levels)  # (a) concrete
@@ -424,9 +422,9 @@ def register_opaque(env, name, levels=()):
             bodyd = to_db(body)               # closed-opaque path unchanged
             tb, pb = db_cert.prove_ht(bodyd, [])
             proof  = db_cert._coerce(pb, tb, tyd, [])
-            db_cert.OPAQUE[san] = (tyd, bodyd, proof, ())
+            db_cert.add_opaque(san, tyd, bodyd, proof, ())
         except Exception:
-            MONO.pop(key, None); db_cert.OPAQUE.pop(san, None); raise
+            MONO.pop(key, None); db_cert._unregister("opaque", san); raise
         return MONO[key]
 
     san = sanitize(name)                      # monomorphic (unchanged)
@@ -438,9 +436,9 @@ def register_opaque(env, name, levels=()):
         body = to_db(d.value)                # (defs via register_def, nested lemmas
         tb, pb = db_cert.prove_ht(body, [])  #  via register_opaque -- so OPAQUE/DEFS
         proof = db_cert._coerce(pb, tb, ty, [])   # land in dependency order)
-        db_cert.OPAQUE[san] = (ty, body, proof, ())   # check the body ONCE
+        db_cert.add_opaque(san, ty, body, proof, ())  # check the body ONCE
     except Exception:
-        CONST_MAP.pop(name, None); db_cert.OPAQUE.pop(san, None); raise
+        CONST_MAP.pop(name, None); db_cert._unregister("opaque", san); raise
     return CONST_MAP[name]
 
 
@@ -474,11 +472,9 @@ def register_axiom(env, name):
     CONST_MAP[name] = TConst(san)            # placeholder first (so the type bridges)
     try:
         ty = to_db(d.type_)                  # bridged in the axiom's OWN params (-> lv_u)
-        db_cert.AXIOMS[san] = (ty, canon)
-        db_cert.ATOMIC.add(san)              # atomic: shift/subst-invariant
+        db_cert.add_axiom(san, ty, canon)    # atomic; appends to EMIT_ORDER
     except Exception:
-        CONST_MAP.pop(name, None); db_cert.AXIOMS.pop(san, None)
-        db_cert.ATOMIC.discard(san); raise
+        CONST_MAP.pop(name, None); db_cert._unregister("axiom", san); raise
     return CONST_MAP[name]
 
 

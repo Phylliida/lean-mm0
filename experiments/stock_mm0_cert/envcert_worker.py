@@ -117,16 +117,14 @@ def main():
     rs_rc = cc_rc = -2
     if certified:
         prelude     = open(f"{HERE}/db.mm1").read()
-        defblock    = db_cert.gen_def_block()
-        opaqueblock = db_cert.gen_opaque_block()
-        axiomblock  = db_cert.gen_axiom_block()   # source-level axioms, carried as assumptions
+        # defs + opaque lemmas + source axioms, in ONE dependency-ordered stream (they
+        # interdepend, so separate blocks can't be ordered); inductives precede them.
+        decls_block = db_cert.gen_all_blocks()
         ind_blocks  = "".join(bridge.IND_EMITTED)
         thms = [f"theorem env_{i}{c['binders']}: $ ht cnil {c['body']} {c['type']} $ =\n'{c['proof']};\n"
                 for i, c in enumerate(certified)]
-        # axioms' types reference inductives (-> after blocks/ind_blocks); defs/opaque
-        # lemmas may cite an axiom (-> axiomblock before them).
-        full = (prelude + "\n" + blocks + "\n" + ind_blocks + "\n" + axiomblock + "\n"
-                + defblock + "\n" + opaqueblock + "\n" + "\n".join(thms))
+        full = (prelude + "\n" + blocks + "\n" + ind_blocks + "\n" + decls_block + "\n"
+                + "\n".join(thms))
         mm1 = f"/tmp/env_{base}.mm1"; mmb = f"/tmp/env_{base}.mmb"
         open(mm1, "w").write(full)
         r = subprocess.run([MM0RS, "compile", mm1, mmb], capture_output=True, text=True)

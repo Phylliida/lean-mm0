@@ -56,6 +56,13 @@ TYCON   = {}   # tycon const name -> level string (the Sort it inhabits)
 CTOR_IX = {}   # ctor const name  -> (ind, index)
 REC_OF  = {}   # recursor name    -> ind
 ATOMIC  = set()  # every generated atomic const name (for shf/sub closure)
+EMIT_ORDER = []  # [(kind, san)] in registration = DEPENDENCY order, kind in
+               # {"def","opaque","axiom"}.  Defs, opaque lemmas, and source axioms can
+               # INTERDEPEND (a def may cite an opaque lemma whose body cites a def...),
+               # so they cannot be emitted as three separate blocks -- they must go out in
+               # one dependency-ordered stream.  bridge.register_* appends here on first
+               # registration, AFTER to_db has registered the entry's own dependencies, so
+               # every symbol follows the symbols it references.  See gen_all_blocks.
 DEFS    = {}   # def const name -> body T  (delta-unfold rides mm0's native
                # def-unfold; adds NO trusted axiom -- see gen_def_block)
 DEFS_LVLS = {} # def name -> tuple of LEVEL binder names, for a UNIVERSE-POLYMORPHIC
@@ -85,6 +92,30 @@ AXIOMS  = {}   # SOURCE-LEVEL axiom name -> (type T, lvls tuple).  A Lean `axiom
                # shf/sub-invariance (atomic, closed).  db.mm1 -- the CIC trusted base --
                # is UNCHANGED; these are the *user development's* axioms, surfaced in the
                # cert's axiom report.  See gen_axiom_block / bridge.register_axiom.
+
+# Registration helpers -- bridge.register_* calls these so DEFS/OPAQUE/AXIOMS and the
+# unified dependency-ordered EMIT_ORDER stay in sync (each is appended AFTER its body has
+# been bridged, i.e. after its own deps are registered, so it follows them).
+def add_def(san, body, lvls=()):
+    DEFS[san] = body
+    if lvls: DEFS_LVLS[san] = lvls
+    EMIT_ORDER.append(("def", san))
+
+def add_opaque(san, ty, body, proof, lvls):
+    OPAQUE[san] = (ty, body, proof, lvls)
+    EMIT_ORDER.append(("opaque", san))
+
+def add_axiom(san, ty, lvls):
+    AXIOMS[san] = (ty, lvls)
+    ATOMIC.add(san)
+    EMIT_ORDER.append(("axiom", san))
+
+def _unregister(kind, san):
+    """Roll back a partial registration (used by bridge's atomic except-clauses)."""
+    {"def": DEFS, "opaque": OPAQUE, "axiom": AXIOMS}[kind].pop(san, None)
+    if kind == "def":   DEFS_LVLS.pop(san, None)
+    if kind == "axiom": ATOMIC.discard(san)
+    if (kind, san) in EMIT_ORDER: EMIT_ORDER.remove((kind, san))
 
 def natlit(n: int) -> str:
     return "nO" if n == 0 else f"(nS {natlit(n-1)})"
@@ -641,6 +672,38 @@ def gen_def_block() -> str:
         lvb = "".join(f" ({l}: lvl)" for l in DEFS_LVLS.get(name, ()))
         out.append(f"def {name}{lvb}: expr = $ {pp(body)} $;\n")
     return "".join(out)
+
+
+def _emit_def(name) -> str:
+    lvb = "".join(f" ({l}: lvl)" for l in DEFS_LVLS.get(name, ()))
+    return f"def {name}{lvb}: expr = $ {pp(DEFS[name])} $;"
+
+def _emit_opaque(name) -> str:
+    ty, body, proof, lvls = OPAQUE[name]
+    lvb  = "".join(f" ({l}: lvl)" for l in lvls)
+    head = f"({name} {' '.join(lvls)})" if lvls else pp(body)   # folded for poly (syntactic unify)
+    return (f"def {name}{lvb}: expr = $ {pp(body)} $;\n"
+            f"theorem htop_{name}{lvb} (g: ctx): $ ht g {head} {pp(ty)} $ =\n'{proof};")
+
+def _emit_axiom(name) -> str:
+    import re as _re
+    ty, lvls = AXIOMS[name]
+    tys = pp(ty)
+    lvb = "".join(f" ({l}: lvl)" for l in lvls if _re.search(r"\b" + _re.escape(l) + r"\b", tys))
+    return (f"term {name}: expr;\n"
+            f"axiom shf_{name} (d c: nat): $ shf {name} d c {name} $;\n"
+            f"axiom sub_{name} (v: expr) (j: nat): $ sub {name} v j {name} $;\n"
+            f"axiom ht_{name} (g: ctx){lvb}: $ ht g {name} {tys} $;")
+
+def gen_all_blocks() -> str:
+    """Emit every registered def / opaque lemma / source axiom in ONE dependency-ordered
+    stream (EMIT_ORDER), so a def that cites an opaque lemma -- or an opaque lemma whose
+    body cites a def -- is always declared after its dependencies.  Replaces the three
+    separate gen_*_block calls (which couldn't satisfy def<->opaque interdependence).
+    Inductive blocks (bridge.IND_EMITTED) are emitted separately, BEFORE this."""
+    emit = {"def": _emit_def, "opaque": _emit_opaque, "axiom": _emit_axiom}
+    out = [emit[kind](name) for kind, name in EMIT_ORDER]
+    return "\n".join(out) + ("\n" if out else "")
 
 
 def gen_axiom_block() -> str:

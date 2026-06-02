@@ -246,12 +246,9 @@ def main():
     faithful = "NA"
     if certified:
         prelude  = open(f"{HERE}/db.mm1").read()
-        defblock = db_cert.gen_def_block()
-        # a de-refl side may cite a `theorem` (opaque lemma); bridging registers it,
-        # so its def + once-checked htop must be emitted too (else the cert would
-        # reference an undefined symbol and break the both-checkers invariant).
-        opaqueblock = db_cert.gen_opaque_block()
-        axiomblock  = db_cert.gen_axiom_block()   # source-level axioms, carried as assumptions
+        # defs + opaque lemmas (a de-refl side / proof may cite a `theorem`) + source
+        # axioms, in ONE dependency-ordered stream (they interdepend).
+        decls_block = db_cert.gen_all_blocks()
         # two cert shapes coexist per file: de-refl LEAVES (`deq G lhs rhs`, what
         # Eq.refl discharges) and whole PROOF TERMS (`ht cnil body type`, induction /
         # case analysis), both checked by both checkers.
@@ -262,10 +259,10 @@ def main():
         thms = [_thm(i, c) for i, c in enumerate(certified)]
         # bridge.IND_EMITTED holds blocks for any user inductive (class/structure)
         # auto-derived during this file's certification; they must precede the
-        # defblock (projections/instances) that reference them.
+        # defs/projections/instances that reference them.
         ind_blocks = "".join(bridge.IND_EMITTED)
-        full = (prelude + "\n" + blocks + "\n" + ind_blocks + "\n" + axiomblock + "\n"
-                + defblock + "\n" + opaqueblock + "\n" + "\n".join(thms))
+        full = (prelude + "\n" + blocks + "\n" + ind_blocks + "\n" + decls_block + "\n"
+                + "\n".join(thms))
         mm1 = f"/tmp/cov_{base}.mm1"; mmb = f"/tmp/cov_{base}.mmb"
         open(mm1, "w").write(full)
         r = subprocess.run([MM0RS, "compile", mm1, mmb], capture_output=True, text=True)
