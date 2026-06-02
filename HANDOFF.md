@@ -14,7 +14,7 @@ outside the trust boundary.
 | Tests | **126 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 59 parser examples) |
 | Total source | ~7.6 kLoC Python + 188 LoC MM0 prelude + 3542 LoC `.lean` examples (59 files) |
 | Trusted base | `src/mm0_verify.py` (710 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 167 commits on `master`; clean working tree |
+| Repo | 169 commits on `master`; clean working tree |
 | Dev shell | `shell.nix` provides PyPy + CPython + bootstrapped `.venv` with pytest + xdist; tests in ~1.5 min on a multi-core box |
 | Stock-MM0 experiment | `experiments/stock_mm0_cert/` — certifying-emitter proof-of-concept: drop our βιζ evaluator, certify against **stock MM0** instead.  Now certifies not only reductions but **whole elaborated proofs** — induction, universe-polymorphism (defs, opaque lemmas, inductives all at generic levels), modular opaque-lemma chains, and proofs *modulo* source axioms; **whole-environment certification re-typechecks all 325/325 elaborated declarations** by the 815-line stock base. `mm0_verify.py` is now legacy — moving to stock MM0 entirely (see section at end) |
 
@@ -1206,17 +1206,27 @@ elaborates across the 40 standalone-elaborating files is re-typechecked end-to-e
 815-line stock base, both checkers, with assumed source axioms carried + reported.  **The
 CIC trusted base (db.mm1) is unchanged throughout.**
 
-**Remaining toward the swap:** (1) ✅ **DONE — a first-class `verify.py`** entry point:
-`python3 verify.py FILE.lean` runs the pipeline, certifies every decl against `db.mm1`,
-checks with both stock checkers, and prints a verdict + assumed-axiom report (`--all`
-verified 40/40 of the standalone-elaborating corpus).  It uses `envcert_worker` as the
-per-file engine; promoting that engine out of `experiments/` is a later tidy-up.  (2)
-wire `verify.py` into `run_all.py` / the test suite in place of `mm0_verify.py`, then
-retire `mm0_verify.py` + the `lean.mm0` emitter path; (3) the ~19 files that don't
-elaborate under the standalone `build_stdlib` need the fuller shared stdlib (a harness
-gap, not a certifier gap).  Other *new* source shapes (orthogonal): mutual inductives;
-quotient types (`Quot`).  (Moving βιζ + shift/subst1 out of the production trusted base
-is now down to that wiring.)
+**Remaining toward the swap:**
+(1) ✅ **DONE — `verify.py`**: `python3 verify.py FILE.lean` runs the pipeline,
+certifies every decl against `db.mm1`, checks with both stock checkers, prints a verdict
++ assumed-axiom report.  Uses `envcert_worker` as the per-file engine (promoting it out
+of `experiments/` is a later tidy-up).
+(2) ✅ **DONE (alongside) — wired into `run_all.py`** as a verification GATE running
+beside the legacy suite: `verify.py --all` (standalone) verifies 40/40 of the
+standalone-elaborating examples, 0 rejected — a green no-regression guard.  Plus **file
+chaining** (`envcert_worker` accepts `prereqs…, target`; `verify.py --chain` + a `DEPS`
+map mirroring the legacy `_run_example` chains) so the stock verifier can reach the ~19
+examples that build on another file's decls.
+(3) ⬜ **Retire `mm0_verify.py`** — **blocked on full parity**, not yet safe.
+`verify.py --all --chain` reaches **52 verified** (up from 40) but surfaces real db_cert
+gaps in previously-unreachable territory (the DecidableEq machinery), which the legacy
+full-stdlib path still covers: the `shf` proof for some *defs* (`min`, `Option_decEq_1`)
+mismatches mm0-rs (→ `nat_dec_le`, `option_ops` rejected); a generic opaque lemma
+(`nil_ne_cons_g`) is referenced but not emitted (ordering; → `decidable_eq_chain`); and
+unsupported `App`/poly-param constructs (4 partial).  These are the remaining work
+before retiring the legacy verifier.  (The both-checkers invariant *rejected* the bad
+certs — never falsely accepted; db.mm1 unchanged.)
+Other *new* source shapes (orthogonal): mutual inductives; quotient types (`Quot`).
 
 **Reproduce — and how the numbers are sourced.**  This section deliberately
 states *capabilities, not counts*: figures (proof-node sizes, how many
