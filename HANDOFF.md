@@ -14,9 +14,9 @@ outside the trust boundary.
 | Tests | **126 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 59 parser examples) |
 | Total source | ~7.6 kLoC Python + 188 LoC MM0 prelude + 3542 LoC `.lean` examples (59 files) |
 | Trusted base | `src/mm0_verify.py` (710 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 163 commits on `master`; clean working tree |
+| Repo | 165 commits on `master`; clean working tree |
 | Dev shell | `shell.nix` provides PyPy + CPython + bootstrapped `.venv` with pytest + xdist; tests in ~1.5 min on a multi-core box |
-| Stock-MM0 experiment | `experiments/stock_mm0_cert/` — certifying-emitter proof-of-concept: drop our βιζ evaluator, certify against **stock MM0** instead.  Now certifies not only reductions but **whole elaborated proofs** — induction, universe-polymorphism (defs, opaque lemmas, and inductives all at generic levels), and modular opaque-lemma chains; the `Eq` sweep is **saturated**, and **whole-environment certification** re-typechecks 322/325 of *all* elaborated declarations (not just `Eq` goals) (see section at end) |
+| Stock-MM0 experiment | `experiments/stock_mm0_cert/` — certifying-emitter proof-of-concept: drop our βιζ evaluator, certify against **stock MM0** instead.  Now certifies not only reductions but **whole elaborated proofs** — induction, universe-polymorphism (defs, opaque lemmas, inductives all at generic levels), modular opaque-lemma chains, and proofs *modulo* source axioms; **whole-environment certification re-typechecks all 325/325 elaborated declarations** by the 815-line stock base. `mm0_verify.py` is now legacy — moving to stock MM0 entirely (see section at end) |
 
 ## What the pipeline does
 
@@ -1161,26 +1161,47 @@ faithfulness-guarded by cross-checking the `db_cert` normal form against
   bridge/db_cert/trusted-base changes — purely a new harness over the existing
   `prove_ht`; everything the universe-polymorphism / opaque-lemma / `DefRef` work built
   is exactly what makes an arbitrary declaration typeable.  Run `envcert_sweep.py` for
-  live numbers; at writing, **322 of 325** declarations across the 40 elaborated files
-  re-typecheck end-to-end (39 files fully), both-checkers invariant holding.  (Enabler:
-  generated **List/Vec are now universe-polymorphic** too — element + container at a
-  level variable `v` matching the kernel's `List.{u} (α : Sort u) : Sort u`, so poly
-  `map`/`length`/`append`/`Vec_length` no longer demand `leveq u 1`.)
+  live numbers; at writing, **all 325 of 325** declarations across the 40 elaborated
+  files re-typecheck end-to-end (every file fully), both-checkers invariant holding.
+  (Enablers: generated **List/Vec are now universe-polymorphic** — element + container
+  at a level variable `v` matching the kernel's `List.{u} (α : Sort u) : Sort u`, so
+  poly `map`/`length`/`append`/`Vec_length` no longer demand `leveq u 1`; and
+  **source-level axioms** — see next.)
+- **Source-level axioms — certify *modulo* the source's axioms** (`axiom_demo.py`).  A
+  proof resting on a Lean `axiom` (no body — `propext`, `Classical.choice`, `Quot.sound`,
+  or a file's own) is certified by **carrying** the axiom as an explicit assumption: a
+  `term <san>: expr;` + an mm0 `axiom ht_<san> (g)(lv..): ht g <san> <type>` (the
+  asserted typing), atomic (shift/subst-invariant), level-agnostic in the term (a use at
+  `.{1,0}` or generic `.{u,0}` resolves to the same const, MM0 unifying the levels).
+  This is the honest treatment — contrast the opaque-lemma path, which *proves* a
+  `theorem`'s typing because it has a body; an axiom has none, so we *assert* it, exactly
+  as the Lean source — and Lean's own kernel — trust it.  The cert is valid *modulo the
+  source's declared axioms*, which is what a proof checker should do, and
+  `envcert_worker` reports them (`axioms=…`, the stock-MM0 `#print axioms`).  **db.mm1 —
+  the CIC trusted base — is unchanged**: a source axiom is the *user development's*
+  assumption, never a new CIC inference rule.  This closed the last envcert skips, so the
+  whole environment saturates at 325/325.  (`bridge.register_axiom`,
+  `db_cert.AXIOMS`/`gen_axiom_block`; all three workers emit the axiom block.)
 
-**Still open / honest limits.**  The `Eq`-obligation sweep is SATURATED (149/149, every
-`Eq` goal by de-refl conversion or whole-proof typing), and whole-environment
-certification re-typechecks **322 of 325** declarations.  The remaining 3 are proofs
-that rest on a **user-declared `axiom`** (`hop.lean`'s `Eq.substI`, asserted in the
-source with no body): certifying those means carrying the user's axiom as an *explicit
-assumption* in the certificate — faithful (the user's own development assumes it), with
-db.mm1 still unchanged — a **distinct semantic mode** ("certify *modulo the user's
-axioms*") that should be labelled crisply rather than blurred with proved typing, so it
-is left as its own deliberate next step.  Other *new* source shapes (not gaps in the
-existing corpus): mutual inductives; indexed `Nat.le` registered eagerly; or replacing
-`src/emitter.py`'s `de-refl` shortcut in the *production* pipeline.  So this
-remains a **parallel proof-of-concept** that certifies real obligations from real
-elaborated source — not the production trusted base.  (Moving βιζ + shift/subst1 out
-of the production trusted base needs that last wiring step.)
+**Direction (2026-06): this is becoming the production verifier.**  `src/mm0_verify.py`
+(the Python verifier with its baked-in βιζ evaluator) is now **legacy** — the project is
+moving to use **stock MM0 entirely**.  So the stock-MM0 certifier is no longer a parallel
+proof-of-concept; promoting it to the real pipeline (and retiring `mm0_verify.py` + the
+`lean.mm0` emitter path) is the **sanctioned destination**.
+
+**Where it stands.**  Both whole-suite measures are now **saturated**: the `Eq`-obligation
+sweep at 149/149 (every `Eq` goal by de-refl conversion or whole-proof typing), and
+whole-environment certification at **325/325** — *every* declaration the kernel
+elaborates across the 40 standalone-elaborating files is re-typechecked end-to-end by the
+815-line stock base, both checkers, with assumed source axioms carried + reported.  **The
+CIC trusted base (db.mm1) is unchanged throughout.**
+
+**Remaining toward the swap:** (1) a first-class `verify`-a-`.lean`-file entry point
+(promote `envcert` out of `experiments/`); (2) wire it into `run_all.py` / the test suite
+in place of `mm0_verify.py`; (3) the ~19 files that don't elaborate under the standalone
+`build_stdlib` need the fuller shared stdlib (a harness gap, not a certifier gap).  Other
+*new* source shapes (orthogonal): mutual inductives; quotient types (`Quot`).  (Moving
+βιζ + shift/subst1 out of the production trusted base is now down to that wiring.)
 
 **Reproduce — and how the numbers are sourced.**  This section deliberately
 states *capabilities, not counts*: figures (proof-node sizes, how many
@@ -1211,6 +1232,7 @@ experiment `README.md`):
   GENERIC level — `structure Box.{u}`, registered level-generically),
   `envcert_demo.py` (whole-environment cert: NON-equational decls — `Nat.le`
   reflexivity/transitivity over the indexed inductive, `choose` via `Decidable.rec`),
+  `axiom_demo.py` (certify a proof *modulo* a source `axiom`, carried + reported),
   `run_levels.py`, `capstone_demo.py`.
 - whole-suite coverage: `python3 coverage_sweep.py` — runs `coverage_worker.py`
   over every `examples/*.lean` (subprocess per file, detector = `Eq A` over any
