@@ -14,7 +14,7 @@ outside the trust boundary.
 | Tests | **126 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 59 parser examples) |
 | Total source | ~7.6 kLoC Python + 188 LoC MM0 prelude + 3542 LoC `.lean` examples (59 files) |
 | Trusted base | `src/mm0_verify.py` (710 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 169 commits on `master`; clean working tree |
+| Repo | 171 commits on `master`; clean working tree |
 | Dev shell | `shell.nix` provides PyPy + CPython + bootstrapped `.venv` with pytest + xdist; tests in ~1.5 min on a multi-core box |
 | Stock-MM0 experiment | `experiments/stock_mm0_cert/` — certifying-emitter proof-of-concept: drop our βιζ evaluator, certify against **stock MM0** instead.  Now certifies not only reductions but **whole elaborated proofs** — induction, universe-polymorphism (defs, opaque lemmas, inductives all at generic levels), modular opaque-lemma chains, and proofs *modulo* source axioms; **whole-environment certification re-typechecks all 325/325 elaborated declarations** by the 815-line stock base. `mm0_verify.py` is now legacy — moving to stock MM0 entirely (see section at end) |
 
@@ -1217,15 +1217,22 @@ standalone-elaborating examples, 0 rejected — a green no-regression guard.  Pl
 chaining** (`envcert_worker` accepts `prereqs…, target`; `verify.py --chain` + a `DEPS`
 map mirroring the legacy `_run_example` chains) so the stock verifier can reach the ~19
 examples that build on another file's decls.
-(3) ⬜ **Retire `mm0_verify.py`** — **blocked on full parity**, not yet safe.
-`verify.py --all --chain` reaches **52 verified** (up from 40) but surfaces real db_cert
-gaps in previously-unreachable territory (the DecidableEq machinery), which the legacy
-full-stdlib path still covers: the `shf` proof for some *defs* (`min`, `Option_decEq_1`)
-mismatches mm0-rs (→ `nat_dec_le`, `option_ops` rejected); a generic opaque lemma
-(`nil_ne_cons_g`) is referenced but not emitted (ordering; → `decidable_eq_chain`); and
-unsupported `App`/poly-param constructs (4 partial).  These are the remaining work
-before retiring the legacy verifier.  (The both-checkers invariant *rejected* the bad
-certs — never falsely accepted; db.mm1 unchanged.)
+(3) ⬜ **Retire `mm0_verify.py`** — **blocked on full parity**, not yet safe; closing in.
+`verify.py --all --chain` now reaches **53 verified, 5 partial, 1 rejected** (run it for
+live numbers).  ✅ The **emission-ordering** bug is fixed — defs/opaque-lemmas/axioms now
+emit in one dependency-ordered stream (`db_cert.EMIT_ORDER`/`gen_all_blocks`), since they
+interdepend (a def can cite an opaque lemma whose body cites a def); that cleared the
+`option_ops` and `decidable_eq_chain` rejections (the "shf mismatch" was the same
+ordering bug — a not-yet-declared def couldn't unfold in a shf goal).  Remaining gaps,
+all in the **DecidableEq machinery** the legacy full-stdlib path still covers:
+  - `nat_dec_le` — REJECTED: db_cert emits a proof with an **unsolved `expr` metavar**
+    (`?i`) near a `deq_beta`/`ht_conv` (a genuine proof-generation gap, not ordering);
+  - `decidable_eq` / `list_mem` — PARTIAL: an `AttributeError:App` in the bridge;
+  - `decidable_eq_chain` / `list_dec_eq` / `list_dec_eq_poly` — PARTIAL: `ValueError:param`
+    (an open-level `leveq` the closed normaliser can't prove — poly DecidableEq).
+These three classes are the remaining work before retiring the legacy verifier.  (The
+both-checkers invariant *rejected* the bad cert — never falsely accepted; db.mm1
+unchanged.)
 Other *new* source shapes (orthogonal): mutual inductives; quotient types (`Quot`).
 
 **Reproduce — and how the numbers are sourced.**  This section deliberately
