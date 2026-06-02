@@ -14,7 +14,7 @@ outside the trust boundary.
 | Tests | **126 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 59 parser examples) |
 | Total source | ~7.6 kLoC Python + 188 LoC MM0 prelude + 3542 LoC `.lean` examples (59 files) |
 | Trusted base | `src/mm0_verify.py` (710 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 171 commits on `master`; clean working tree |
+| Repo | 172 commits on `master`; clean working tree |
 | Dev shell | `shell.nix` provides PyPy + CPython + bootstrapped `.venv` with pytest + xdist; tests in ~1.5 min on a multi-core box |
 | Stock-MM0 experiment | `experiments/stock_mm0_cert/` — certifying-emitter proof-of-concept: drop our βιζ evaluator, certify against **stock MM0** instead.  Now certifies not only reductions but **whole elaborated proofs** — induction, universe-polymorphism (defs, opaque lemmas, inductives all at generic levels), modular opaque-lemma chains, and proofs *modulo* source axioms; **whole-environment certification re-typechecks all 325/325 elaborated declarations** by the 815-line stock base. `mm0_verify.py` is now legacy — moving to stock MM0 entirely (see section at end) |
 
@@ -1229,10 +1229,21 @@ all in the **DecidableEq machinery** the legacy full-stdlib path still covers:
     (`?i`) near a `deq_beta`/`ht_conv` (a genuine proof-generation gap, not ordering);
   - `decidable_eq` / `list_mem` — PARTIAL: an `AttributeError:App` in the bridge;
   - `decidable_eq_chain` / `list_dec_eq` / `list_dec_eq_poly` — PARTIAL: `ValueError:param`
-    (an open-level `leveq` the closed normaliser can't prove — poly DecidableEq).
-These three classes are the remaining work before retiring the legacy verifier.  (The
+    — **traced to a proof-SIZE wall, not a bug.**  The skip is closable on
+    db_cert/mm0-rs by a *symmetric* `_coerce` (the level param can be on the `have`
+    side — a poly inductive applied at a concrete level, where db_cert carries the
+    tycon's result level as the generic `v` but MM0 has unified `v := 1`; emit bare,
+    MM0 unifies, fail-safe).  That was tried and **reverted**: it is sound and
+    regression-free on the saturated sweeps, but it only unblocks these huge poly-list
+    `DecidableEq` proofs, whose `Decidable` *instances are defs* (δ-transparent) so
+    their typing is **inlined at every use** → 5 MB+ certs that exceed mm0-c-np's store
+    (>256 MB) and time (>2 min).  The real fix is **proof-size reduction — opacity for
+    the def machinery** (treat selected defs like opaque lemmas, typed once), a
+    substantial separate effort; until then these stay clean PARTIALs (the certified
+    subset passes both checkers).
+These classes are the remaining work before retiring the legacy verifier.  (The
 both-checkers invariant *rejected* the bad cert — never falsely accepted; db.mm1
-unchanged.)
+unchanged; mm0-c-np left at its stock 64 MB store.)
 Other *new* source shapes (orthogonal): mutual inductives; quotient types (`Quot`).
 
 **Reproduce — and how the numbers are sourced.**  This section deliberately
