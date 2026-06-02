@@ -53,7 +53,7 @@ def validate_list():
                  App(V(4), App(App(App(CONS, V(5)), V(2)), V(1))))))  # C (cons A h t)
     # stack [A, C, m_nil, m_cons] : Pi x:List A, C x
     tail   = EPi(App(TL, V(3)), App(V(3), V(0)))
-    expected = EPi(ESort("(lS lz)"), EPi(C_kind, EPi(mnil, EPi(mcons, tail))))
+    expected = EPi(ESort("v"), EPi(C_kind, EPi(mnil, EPi(mcons, tail))))  # A : Sort v (poly)
     ok = LIST.rec_type == expected
     print(f"  List recursor-type regeneration matches hand-built: {ok}")
     if not ok:

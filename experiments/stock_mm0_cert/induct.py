@@ -333,10 +333,16 @@ LNAT = Inductive("tlnat", "(lS lz)", [
 
 # Polymorphic List (A : Type) : nil | cons (head : A) (tail : List A)
 #   parameter A lives at Sort 1 ("Type"); List A also at Sort 1.
-LIST = Inductive("tlist", "(lS lz)", [
+# UNIVERSE-POLYMORPHIC: matches the kernel's `List.{u} (α : Sort u) : Sort u` -- the
+# element AND the list live at a level VARIABLE v (was the monomorphic Sort 1).
+# generate() auto-detects v and binds it on each typing axiom (ht_tlist (g)(v: lvl),
+# ht_prec (g)(u v: lvl) with u the motive level), so `List Nat`/`List Bool` (v := 1)
+# and a level-generic `List.{u}` (e.g. polymorphic `map`/`length`/`append`) typecheck
+# against the SAME axioms -- MM0 unifies v at each use site, no trusted-base change.
+LIST = Inductive("tlist", "v", [
     Ctor("pnil", ()),
     Ctor("pcons", (Fld(rec=False, ty=NVar("A")), Fld(rec=True))),
-], "prec", params=(("A", NSort("(lS lz)")),))
+], "prec", params=(("A", NSort("v")),))
 
 # Identity type / equality.  Indexed: params (A : Sort1) (a : A); index (b : A).
 #   teq   : Pi A:Sort1, Pi a:A, Pi b:A, Prop          (Eq is a Prop -- Sort 0!)
@@ -364,7 +370,11 @@ EQ = Inductive("teq", "lz", [
 #   vcons : Pi n:Nat, Pi a:A, Pi xs:(Vec A n), Vec A (succ n)
 # The tail field xs lives at index n, but the ctor produces index (succ n) --
 # so the IH / recursive call use n, not (succ n).
-VEC = Inductive("tvec", "(lS lz)", [
+# UNIVERSE-POLYMORPHIC like List: kernel `Vec.{u} (α : Sort u) : Nat -> Sort u`, so the
+# element + the vector live at a level VARIABLE v (was the monomorphic Sort 1); the Nat
+# index stays closed.  generate() auto-detects + binds v, so `Vec Nat` (v := 1) and a
+# level-generic `Vec.{u}` typecheck against the same axioms.
+VEC = Inductive("tvec", "v", [
     Ctor("vnil", (), index_vals=(NConst("tzero"),)),
     Ctor("vcons", (
         Fld(rec=False, ty=NAT_T,      name="n"),
@@ -372,5 +382,5 @@ VEC = Inductive("tvec", "(lS lz)", [
         Fld(rec=True,  rec_index_vals=(NVar("n"),)),
     ), index_vals=(NApp(NConst("tsucc"), NVar("n")),)),
 ], "vrec",
-    params=(("A", NSort("(lS lz)")),),
+    params=(("A", NSort("v")),),
     indices=(("n", NAT_T),))
