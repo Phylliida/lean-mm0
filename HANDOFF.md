@@ -14,9 +14,9 @@ outside the trust boundary.
 | Tests | **126 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 59 parser examples) |
 | Total source | ~7.6 kLoC Python + 188 LoC MM0 prelude + 3542 LoC `.lean` examples (59 files) |
 | Trusted base | `src/mm0_verify.py` (710 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 157 commits on `master`; clean working tree |
+| Repo | 160 commits on `master`; clean working tree |
 | Dev shell | `shell.nix` provides PyPy + CPython + bootstrapped `.venv` with pytest + xdist; tests in ~1.5 min on a multi-core box |
-| Stock-MM0 experiment | `experiments/stock_mm0_cert/` — certifying-emitter proof-of-concept: drop our βιζ evaluator, certify against **stock MM0** instead.  Now certifies not only reductions but **whole elaborated proofs** — induction, universe-polymorphism, and modular opaque-lemma chains (including **universe-polymorphic** lemmas cited by reference) (see section at end) |
+| Stock-MM0 experiment | `experiments/stock_mm0_cert/` — certifying-emitter proof-of-concept: drop our βιζ evaluator, certify against **stock MM0** instead.  Now certifies not only reductions but **whole elaborated proofs** — induction, universe-polymorphism (defs, opaque lemmas, and inductives all at generic levels), and modular opaque-lemma chains; the whole-corpus coverage **sweep is saturated** (every `Eq` obligation certifies) (see section at end) |
 
 ## What the pipeline does
 
@@ -1017,7 +1017,8 @@ faithfulness-guarded by cross-checking the `db_cert` normal form against
   both sides), which is what `Eq.refl` actually proves; and the obligations that do
   **not** convert (real proofs — induction, case analysis, transport) are certified
   by **typing the whole proof term** (`ht cnil value type`).  Both are swept under
-  the both-checkers invariant — the `not-convertible` skip class is gone.
+  the both-checkers invariant — the sweep is **saturated** (every `Eq` obligation in
+  the elaborated corpus certifies, by one route or the other; zero skips).
 - **`Eq`-in-value obligations / sort-valued nested recursors** (`bool_dec_eq.lean`
   — `Bool` decidable equality, `brec` feeding `eqrec`).  Two layers: (1) the hand-
   written `induct.EQ` declared `teq` at `Sort 1`, but the kernel `Eq` is a `Prop`
@@ -1083,8 +1084,8 @@ faithfulness-guarded by cross-checking the `db_cert` normal form against
   (`coverage_worker.try_proofterm`), so `deq` leaves and `ht cnil` whole-proofs coexist
   per file and are both checked by both checkers.  The sweep's `not-convertible` skip
   class is thereby **eliminated** (it rescued `zero_add`/`succ_add`/`add_comm`/
-  `Bool.not_not`/`succ_inj`/`my_eq_symm.{u}`); the only skips left are a poly *def* used
-  at a *generic* level (`unsup:u`) — see *still open* below.
+  `Bool.not_not`/`succ_inj`/`my_eq_symm.{u}`); together with the universe-poly def /
+  inductive work (below), the sweep is now **fully SATURATED** — see *still open*.
 - **Universe-polymorphic generated inductives** (the enabler for `my_eq_symm.{u}`).
   `induct.generate` now AUTO-DETECTS the level variables in each generated type and
   binds them on the typing axioms: `ht_<tycon> (g)(v: lvl)`, `ht_<ctor> (g)(v: lvl)`,
@@ -1129,20 +1130,35 @@ faithfulness-guarded by cross-checking the `db_cert` normal form against
   change** — db.mm1 byte-identical; the level binder lives on the generated def/htop,
   checked like everything else.  Certified by **both** checkers (`symm_symm.{u}` 348
   nodes; the lemma typed once at 1078, cited twice by reference).
+- **Universe-polymorphic `def` used at a generic level** (`poly_def_gen_demo.py`).  The
+  *transparent* sibling of the poly opaque lemma: a poly `def` (`Eq.symm.{u}` via
+  `apply`/`rewrite`/`rw`) used at a generic level is registered ONCE as a level-bound
+  mm0 def `<name>_g (lv_u: lvl)`, and a use is a new `DefRef(san, lvls)` db_cert node →
+  `(name_g lv_u)`.  **Unlike `OpaqueRef`** (opaque — typed once by an htop reference,
+  never unfolds), a `DefRef` **δ-unfolds** to `body[lvls]` in `whnf`/`prove_ht` (typed
+  via the unfolded body; MM0 delta-matches the folded ref), shift/subst-invariant like
+  any closed def; `gen_def_block` emits the `(lv: lvl)` binders (`DEFS_LVLS`).  This is
+  why a def costs more than its opaque twin (typing inlines per use): `use_sym.{u}` 2796
+  nodes vs 348 for the opaque version typed once.  No trusted-base change.
+- **Universe-polymorphic inductive used at a generic level** (`poly_ind_gen_demo.py`).
+  The third leg, and the cleanest: an inductive's **term constructors are already
+  level-agnostic** in db.mm1 (the level rides the generated typing/ι axioms — `refl_eq`
+  takes no level arg, `ht_refl_eq (g)(v: lvl)` binds it), so a poly inductive
+  (`Prod.{u,u}`, or a `structure Box.{u}`) at a generic level is just registered ONCE,
+  level-generically (`register_inductive` with `inst = identity`, keeping its own params
+  → `lv_u`, which `induct.generate` auto-detects and binds) and used by **plain const
+  names — no level-application node at all**.  A shared `_ind_tag(levels)` returns `g`
+  for a generic registration, the numeral tag otherwise.  No trusted-base change.
 
-**Still open / honest limits.**  The whole-proof track is now **wired into the sweep**
-(above), so the corpus's `Eq` obligations all certify by one of the two routes —
-de-refl conversion or whole-proof typing — except a single, precisely-named class.
-**The one remaining sweep skip is `unsup:u`**: a proof that uses a polymorphic **def**
-(`Eq.symm`/`Eq.trans`/`Eq.rec` via `apply`/`rewrite`/`rw`) at a *generic* level —
-`level_to_nat` can't name a generic monomorphisation.  This is the **δ-def analogue of
-the universe-polymorphic opaque-lemma work**: a poly def at a generic level needs to be
-emitted as a level-bound mm0 def `(d_g lv_u)` and δ-unfolded with the level
-substituted (harder than the opaque case, which never unfolds — a def *must*).  Other
-not-yet-covered: poly inductives *other* than `Eq` (List/Vec are still spec'd
-monomorphic at `Sort 1` — making them poly is now just a one-line spec change, since
-the generator auto-detects); mutual inductives; indexed `Nat.le`; or replacing
-`src/emitter.py`'s `de-refl` shortcut in the *production* pipeline.  So this
+**Still open / honest limits.**  The whole-proof track is **wired into the sweep**, and
+all three universe-polymorphic-at-a-generic-level cases (def, opaque lemma, inductive)
+are closed — so **the sweep is now SATURATED: every `Eq` obligation in the elaborated
+corpus certifies** (by de-refl conversion or whole-proof typing), all files fully, zero
+skips, both-checkers invariant holding.  What remains is *new* source shapes, not gaps
+in the existing corpus: poly inductives *other* than `Eq` registered eagerly (List/Vec
+are still spec'd monomorphic at `Sort 1` — a one-line spec change, since the generator
+auto-detects); mutual inductives; indexed `Nat.le`; or replacing `src/emitter.py`'s
+`de-refl` shortcut in the *production* pipeline.  So this
 remains a **parallel proof-of-concept** that certifies real obligations from real
 elaborated source — not the production trusted base.  (Moving βιζ + shift/subst1 out
 of the production trusted base needs that last wiring step.)
@@ -1171,13 +1187,15 @@ experiment `README.md`):
   `my_eq_symm.{1}`, monomorphised + typed once by reference),
   `poly_opaque_gen_demo.py` (a universe-poly `theorem` cited at a GENERIC level —
   `symm_symm.{u}` citing `my_eq_symm.{u}` — typed once, level-generically, by reference),
+  `poly_def_gen_demo.py` (a universe-poly `def` at a GENERIC level — `mysym.{u}` via a
+  `DefRef` that δ-unfolds), `poly_ind_gen_demo.py` (a universe-poly *inductive* at a
+  GENERIC level — `structure Box.{u}`, registered level-generically),
   `run_levels.py`, `capstone_demo.py`.
 - whole-suite coverage: `python3 coverage_sweep.py` — runs `coverage_worker.py`
   over every `examples/*.lean` (subprocess per file, detector = `Eq A` over any
   type), certifying each obligation by **de-refl conversion** (rfl leaves) **or
   whole-proof typing** (`ht cnil body type` — induction / case analysis), prints a
-  fresh per-file table + a **"Top skip reasons"** ranking that names its own next
-  bridging targets (now just `unsup:u` — a poly def at a generic level), and
-  **asserts** the invariant that every file with a certified obligation passes both
-  mm0-rs and mm0-c (exits non-zero otherwise).  `coverage.md` describes the method;
-  run the sweep for the current spread.
+  fresh per-file table + a **"Top skip reasons"** ranking (currently empty — the sweep
+  is **saturated**), and **asserts** the invariant that every file with a certified
+  obligation passes both mm0-rs and mm0-c (exits non-zero otherwise).  `coverage.md`
+  describes the method; run the sweep for the current spread.
