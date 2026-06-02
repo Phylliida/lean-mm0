@@ -14,7 +14,7 @@ outside the trust boundary.
 | Tests | **126 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 59 parser examples) |
 | Total source | ~7.6 kLoC Python + 188 LoC MM0 prelude + 3542 LoC `.lean` examples (59 files) |
 | Trusted base | `src/mm0_verify.py` (710 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 155 commits on `master`; clean working tree |
+| Repo | 157 commits on `master`; clean working tree |
 | Dev shell | `shell.nix` provides PyPy + CPython + bootstrapped `.venv` with pytest + xdist; tests in ~1.5 min on a multi-core box |
 | Stock-MM0 experiment | `experiments/stock_mm0_cert/` — certifying-emitter proof-of-concept: drop our βιζ evaluator, certify against **stock MM0** instead.  Now certifies not only reductions but **whole elaborated proofs** — induction, universe-polymorphism, and modular opaque-lemma chains (including **universe-polymorphic** lemmas cited by reference) (see section at end) |
 
@@ -1009,12 +1009,15 @@ faithfulness-guarded by cross-checking the `db_cert` normal form against
   - **nested recursor majors** — the Nat-ι branch normalises the major before
     firing succ-ι, so a *computed* major (`Nat.add (Nat.add ..) ..`) reduces.
 - **The capstone**: real `examples/*.lean` driven through the *actual* pipeline
-  (`src.lean_parser.elaborate` = parser→elaborator→kernel), whose `de-refl`
-  obligations (`Eq A a b` goals holding by computation — what `Eq.refl` / `by
-  rfl` discharge — over **any** bridged type `A`, not just `Nat`: Bool, lists,
-  data-structure values, …) are certified by stock mm0-c.  These are certified by
-  **conversion** (`prove_conv` normalises both sides), which is what `Eq.refl`
-  actually proves — not by value equality.
+  (`src.lean_parser.elaborate` = parser→elaborator→kernel), whose `Eq A a b`
+  obligations are certified by stock mm0-c.  Two routes, chosen by the real kernel:
+  the **de-refl** leaves (goals holding by computation — what `Eq.refl` / `by rfl`
+  discharge — over **any** bridged type `A`, not just `Nat`: Bool, lists,
+  data-structure values, …) are certified by **conversion** (`prove_conv` normalises
+  both sides), which is what `Eq.refl` actually proves; and the obligations that do
+  **not** convert (real proofs — induction, case analysis, transport) are certified
+  by **typing the whole proof term** (`ht cnil value type`).  Both are swept under
+  the both-checkers invariant — the `not-convertible` skip class is gone.
 - **`Eq`-in-value obligations / sort-valued nested recursors** (`bool_dec_eq.lean`
   — `Bool` decidable equality, `brec` feeding `eqrec`).  Two layers: (1) the hand-
   written `induct.EQ` declared `teq` at `Sort 1`, but the kernel `Eq` is a `Prop`
@@ -1074,7 +1077,14 @@ faithfulness-guarded by cross-checking the `db_cert` normal form against
   (the `trec` typing rule feeds `induct.NAT.rec_type`, which carries non-singleton Nat
   consts, so the whnf Nat-ι gate must match by NAME, not identity) make a full
   induction proof go through.  Delta-inlined helper lemmas are fine (`add_comm` inlines
-  its two `def` helpers); a per-decl proof-term mode is **not** wired into the sweep.
+  its two `def` helpers).  **Now wired into the coverage sweep** (not just demos): a
+  not-convertible `Eq` obligation — one whose sides the kernel oracle says *differ*, so
+  it needs a real proof — is certified by typing the decl's whole proof term
+  (`coverage_worker.try_proofterm`), so `deq` leaves and `ht cnil` whole-proofs coexist
+  per file and are both checked by both checkers.  The sweep's `not-convertible` skip
+  class is thereby **eliminated** (it rescued `zero_add`/`succ_add`/`add_comm`/
+  `Bool.not_not`/`succ_inj`/`my_eq_symm.{u}`); the only skips left are a poly *def* used
+  at a *generic* level (`unsup:u`) — see *still open* below.
 - **Universe-polymorphic generated inductives** (the enabler for `my_eq_symm.{u}`).
   `induct.generate` now AUTO-DETECTS the level variables in each generated type and
   binds them on the typing axioms: `ht_<tycon> (g)(v: lvl)`, `ht_<ctor> (g)(v: lvl)`,
@@ -1120,16 +1130,19 @@ faithfulness-guarded by cross-checking the `db_cert` normal form against
   checked like everything else.  Certified by **both** checkers (`symm_symm.{u}` 348
   nodes; the lemma typed once at 1078, cited twice by reference).
 
-**Still open / honest limits.**  The de-refl-obligation fragment is **saturated** for
-the elaborated corpus (only `not-convertible` skips remain there), and the whole-proof
-track now certifies closed, self-contained proofs *using the IH*, monomorphic **and
-level-polymorphic**, **and proofs that cite opaque lemmas by reference — monomorphic
-lemmas, and universe-polymorphic lemmas at both concrete and generic levels** (above).
-What that track does **not** yet cover: poly inductives *other* than `Eq` (List/Vec are
-still spec'd monomorphic at `Sort 1` — making them poly is now just a one-line spec
-change, since the generator auto-detects); and integration into the *sweep* (typing
-every not-convertible decl).  Also still open: mutual inductives; indexed `Nat.le`; or
-replacing `src/emitter.py`'s `de-refl` shortcut in the *production* pipeline.  So this
+**Still open / honest limits.**  The whole-proof track is now **wired into the sweep**
+(above), so the corpus's `Eq` obligations all certify by one of the two routes —
+de-refl conversion or whole-proof typing — except a single, precisely-named class.
+**The one remaining sweep skip is `unsup:u`**: a proof that uses a polymorphic **def**
+(`Eq.symm`/`Eq.trans`/`Eq.rec` via `apply`/`rewrite`/`rw`) at a *generic* level —
+`level_to_nat` can't name a generic monomorphisation.  This is the **δ-def analogue of
+the universe-polymorphic opaque-lemma work**: a poly def at a generic level needs to be
+emitted as a level-bound mm0 def `(d_g lv_u)` and δ-unfolded with the level
+substituted (harder than the opaque case, which never unfolds — a def *must*).  Other
+not-yet-covered: poly inductives *other* than `Eq` (List/Vec are still spec'd
+monomorphic at `Sort 1` — making them poly is now just a one-line spec change, since
+the generator auto-detects); mutual inductives; indexed `Nat.le`; or replacing
+`src/emitter.py`'s `de-refl` shortcut in the *production* pipeline.  So this
 remains a **parallel proof-of-concept** that certifies real obligations from real
 elaborated source — not the production trusted base.  (Moving βιζ + shift/subst1 out
 of the production trusted base needs that last wiring step.)
@@ -1161,8 +1174,10 @@ experiment `README.md`):
   `run_levels.py`, `capstone_demo.py`.
 - whole-suite coverage: `python3 coverage_sweep.py` — runs `coverage_worker.py`
   over every `examples/*.lean` (subprocess per file, detector = `Eq A` over any
-  type), prints a fresh per-file table + a **"Top skip reasons"** ranking that
-  names its own next bridging targets (e.g. `unsup:<const>` / `ValueError:<head>`),
-  and **asserts** the invariant that every file with a certified obligation
-  passes both mm0-rs and mm0-c (exits non-zero otherwise).  `coverage.md`
-  describes the method; run the sweep for the current spread.
+  type), certifying each obligation by **de-refl conversion** (rfl leaves) **or
+  whole-proof typing** (`ht cnil body type` — induction / case analysis), prints a
+  fresh per-file table + a **"Top skip reasons"** ranking that names its own next
+  bridging targets (now just `unsup:u` — a poly def at a generic level), and
+  **asserts** the invariant that every file with a certified obligation passes both
+  mm0-rs and mm0-c (exits non-zero otherwise).  `coverage.md` describes the method;
+  run the sweep for the current spread.
