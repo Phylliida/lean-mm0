@@ -38,6 +38,14 @@ REC_OF  = {}   # recursor name    -> ind
 ATOMIC  = set()  # every generated atomic const name (for shf/sub closure)
 DEFS    = {}   # def const name -> body T  (delta-unfold rides mm0's native
                # def-unfold; adds NO trusted axiom -- see gen_def_block)
+OPAQUE  = {}   # opaque-lemma name -> (type T, body T, htop-proof str).  A `theorem`
+               # (opaque proof) is checked ONCE -- emitted as an mm0 `def` plus a
+               # `htop_<name> (g: ctx): ht g <body> <type>` theorem (g-polymorphic,
+               # since a closed body's typing never pins the context) -- and every
+               # USE of the lemma types by REFERENCE to that theorem, never re-typing
+               # the body.  This is true opacity (modular proofs), with NO trusted
+               # axiom: the lemma's typing is proved, not asserted.  See
+               # gen_opaque_block / bridge.register_opaque.
 
 def natlit(n: int) -> str:
     return "nO" if n == 0 else f"(nS {natlit(n-1)})"
@@ -85,6 +93,11 @@ def prove_shf(e: T, d: int, c: int):
             b2, pb = prove_shf(body, d, c)
             assert b2 == body, f"def {e.name} body not shift-closed"
             return e, pb
+        if e.name in OPAQUE:                  # opaque lemma = closed def -> invariant
+            body = OPAQUE[e.name][1]
+            b2, pb = prove_shf(body, d, c)
+            assert b2 == body, f"opaque {e.name} body not shift-closed"
+            return e, pb
         raise KeyError(f"shf: unknown const {e.name}")
     if isinstance(e, App):
         f2, pf = prove_shf(e.f, d, c); a2, pa = prove_shf(e.a, d, c)
@@ -119,6 +132,11 @@ def prove_sub(b: T, v: T, j: int):
             body = DEFS[b.name]
             b2, pb = prove_sub(body, v, j)
             assert b2 == body, f"def {b.name} body not subst-closed"
+            return b, pb
+        if b.name in OPAQUE:                  # opaque lemma = closed def -> invariant
+            body = OPAQUE[b.name][1]
+            b2, pb = prove_sub(body, v, j)
+            assert b2 == body, f"opaque {b.name} body not subst-closed"
             return b, pb
         raise KeyError(f"sub: unknown const {b.name}")
     if isinstance(b, App):
@@ -303,6 +321,8 @@ def prove_ht(e: T, ctx):
     if isinstance(e, Const):
         # compare by NAME, not identity: a `tnat` inside a generated schema is a
         # fresh Const("tnat"), not the module singleton TNAT.
+        if e.name in OPAQUE:                                       # opaque lemma:
+            return OPAQUE[e.name][0], f"(htop_{e.name})"          # type by reference
         if e.name in DEFS:    return prove_ht(DEFS[e.name], ctx)   # delta: type via body
         if e.name == "tnat":  return ESort("(lS lz)"), "(ht_nat)"
         if e.name == "tzero": return TNAT, "(ht_zero)"
@@ -526,6 +546,22 @@ def gen_def_block() -> str:
     insertion order; the caller registers dependencies (inductives, earlier
     defs) before the defs that use them."""
     return "".join(f"def {name}: expr = $ {pp(body)} $;\n" for name, body in DEFS.items())
+
+
+def gen_opaque_block() -> str:
+    """Emit each opaque lemma as an mm0 `def` (so its name is a real expr that
+    unfolds to its body) PLUS a `htop_<name>` typing theorem proved ONCE.  No
+    trusted axiom: the typing is *proved* (g-polymorphic, so it is usable in any
+    context).  A use of the lemma references `(htop_<name>)` -- the body is never
+    re-typed -- which is what makes modular proof chains scale (the kernel's whole
+    reason for `theorem`/opaque-def).  Insertion order is dependency order (a
+    lemma is registered after the lemmas its body cites)."""
+    out = []
+    for name, (ty, body, proof) in OPAQUE.items():
+        out.append(f"def {name}: expr = $ {pp(body)} $;")
+        out.append(f"theorem htop_{name} (g: ctx): $ ht g {pp(body)} {pp(ty)} $ =\n"
+                   f"'{proof};")
+    return "\n".join(out) + ("\n" if out else "")
 
 
 # ---------------- universe level normalisation: leveq certificates ----------------

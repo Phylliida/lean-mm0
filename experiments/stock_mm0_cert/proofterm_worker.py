@@ -81,9 +81,11 @@ def main():
 
     prelude  = open(f"{HERE}/db.mm1").read()
     defblock = db_cert.gen_def_block()
+    opaqueblock = db_cert.gen_opaque_block()   # cited lemmas: def + once-checked htop
     ind_blocks = "".join(bridge.IND_EMITTED)
     thm = f"theorem pt{binders}: $ ht cnil {bodys} {tys} $ =\n'{proof};\n"
-    full = prelude + "\n" + blocks + "\n" + ind_blocks + "\n" + defblock + "\n" + thm
+    full = (prelude + "\n" + blocks + "\n" + ind_blocks + "\n" + defblock + "\n"
+            + opaqueblock + "\n" + thm)
     mm1 = f"/tmp/pt_{base}_{decl}.mm1"; mmb = f"/tmp/pt_{base}_{decl}.mmb"
     open(mm1, "w").write(full)
 

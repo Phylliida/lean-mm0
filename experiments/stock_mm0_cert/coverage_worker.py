@@ -213,6 +213,10 @@ def main():
     if certified:
         prelude  = open(f"{HERE}/db.mm1").read()
         defblock = db_cert.gen_def_block()
+        # a de-refl side may cite a `theorem` (opaque lemma); bridging registers it,
+        # so its def + once-checked htop must be emitted too (else the cert would
+        # reference an undefined symbol and break the both-checkers invariant).
+        opaqueblock = db_cert.gen_opaque_block()
         thms = [f"theorem cov_{i}{binders}: $ deq {G} {dl} {dr} $ =\n'{conv};\n"
                 for i, (nm, val, binders, G, dl, dr, conv, nodes) in enumerate(certified)]
         # bridge.IND_EMITTED holds blocks for any user inductive (class/structure)
@@ -220,7 +224,7 @@ def main():
         # defblock (projections/instances) that reference them.
         ind_blocks = "".join(bridge.IND_EMITTED)
         full = (prelude + "\n" + blocks + "\n" + ind_blocks + "\n"
-                + defblock + "\n" + "\n".join(thms))
+                + defblock + "\n" + opaqueblock + "\n" + "\n".join(thms))
         mm1 = f"/tmp/cov_{base}.mm1"; mmb = f"/tmp/cov_{base}.mmb"
         open(mm1, "w").write(full)
         r = subprocess.run([MM0RS, "compile", mm1, mmb], capture_output=True, text=True)

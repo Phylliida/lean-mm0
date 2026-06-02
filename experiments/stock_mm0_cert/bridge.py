@@ -223,6 +223,10 @@ def to_db(e) -> object:
         if _ENV is not None and _ENV.has(e.name) \
            and type(_ENV.get(e.name)).__name__ == "Definition":
             return register_def(_ENV, e.name, e.levels)
+        # lazy: an opaque `theorem` (a cited lemma) -> register for by-reference typing
+        if _ENV is not None and _ENV.has(e.name) \
+           and type(_ENV.get(e.name)).__name__ == "Theorem":
+            return register_opaque(_ENV, e.name)
         raise Unsupported(f"Const {e.name!r} (outside the bridged fragments)")
     raise Unsupported(f"{type(e).__name__}")
 
@@ -291,6 +295,39 @@ def register_def(env, name, levels=()):
         db_cert.DEFS[san] = to_db(body)
     except Exception:
         CONST_MAP.pop(name, None); db_cert.DEFS.pop(san, None); raise
+    return CONST_MAP[name]
+
+
+def register_opaque(env, name):
+    """Register a `theorem` (an OPAQUE proof) as an opaque lemma: it is emitted as
+    an mm0 def + a once-checked `htop_<name>` typing theorem (db_cert.gen_opaque_block),
+    and every USE of it types by reference -- the body is never re-typed.  This is
+    what lets modular proof chains scale (the kernel marks lemmas opaque for exactly
+    this reason), and it adds NO trusted axiom: the lemma's typing is *proved*
+    (g-polymorphic, since a closed body's typing never pins the context).
+
+    Monomorphic only: a universe-polymorphic lemma's `htop` would need level binders
+    (the typing axioms already bind levels, but threading them through a cached
+    reference is a further step), so a poly theorem stays Unsupported here."""
+    global _ENV
+    _ENV = env
+    d = env.get(name)
+    if type(d).__name__ != "Theorem":
+        raise Unsupported(f"{name!r} is not a Theorem ({type(d).__name__})")
+    if d.level_params:
+        raise Unsupported(f"opaque lemma {name!r} is universe-polymorphic")
+    san = sanitize(name)
+    if san in db_cert.OPAQUE:
+        return TConst(san)
+    CONST_MAP[name] = TConst(san)            # placeholder first (maps name -> san)
+    try:
+        ty = to_db(d.type_)                  # bridges + lazily registers body deps
+        body = to_db(d.value)                # (defs via register_def, nested lemmas
+        tb, pb = db_cert.prove_ht(body, [])  #  via register_opaque -- so OPAQUE/DEFS
+        proof = db_cert._coerce(pb, tb, ty, [])   # land in dependency order)
+        db_cert.OPAQUE[san] = (ty, body, proof)   # check the body ONCE
+    except Exception:
+        CONST_MAP.pop(name, None); db_cert.OPAQUE.pop(san, None); raise
     return CONST_MAP[name]
 
 
