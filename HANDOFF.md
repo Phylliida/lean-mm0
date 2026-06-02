@@ -14,9 +14,9 @@ outside the trust boundary.
 | Tests | **126 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 59 parser examples), **+ a stock-MM0 verify gate** (`verify.py --all`); `run_all.py` runs all 5 stages |
 | Total source | ~7.6 kLoC Python + 188 LoC MM0 prelude + 3542 LoC `.lean` examples (59 files) |
 | Trusted base | **Legacy (production, being retired):** `src/mm0_verify.py` (710 LoC) + `prelude/cic.mm0` (188 LoC).  **Target (stock MM0):** `experiments/stock_mm0_cert/db.mm1` (CIC axioms) + the 815-line stock `mm0-c` — **no Python evaluator** (see `verify.py` + the stock-MM0 section) |
-| Repo | 173 commits on `master`; clean working tree |
+| Repo | 175 commits on `master`; clean working tree |
 | Dev shell | `shell.nix` provides PyPy + CPython + bootstrapped `.venv` with pytest + xdist; tests in ~1.5 min on a multi-core box |
-| Stock-MM0 experiment | `experiments/stock_mm0_cert/` — certifying-emitter proof-of-concept: drop our βιζ evaluator, certify against **stock MM0** instead.  Now certifies not only reductions but **whole elaborated proofs** — induction, universe-polymorphism (defs, opaque lemmas, inductives all at generic levels), modular opaque-lemma chains, and proofs *modulo* source axioms; **whole-environment certification re-typechecks all 325/325 elaborated declarations** by the 815-line stock base. **`verify.py`** is the first-class entry point (`verify.py FILE.lean` / `--all`), wired into `run_all` as a gate alongside the legacy suite. `mm0_verify.py` is now legacy — moving to stock MM0 entirely; the swap is infra-complete, blocked on a hard DecidableEq tail (see section at end) |
+| Stock-MM0 experiment | `experiments/stock_mm0_cert/` — certifying-emitter proof-of-concept: drop our βιζ evaluator, certify against **stock MM0** instead.  Now certifies not only reductions but **whole elaborated proofs** — induction, universe-polymorphism (defs, opaque lemmas, inductives all at generic levels), modular opaque-lemma chains, and proofs *modulo* source axioms; **whole-environment certification re-typechecks all 325/325 elaborated declarations** by the 815-line stock base. **`verify.py`** is the first-class entry point (`verify.py FILE.lean` / `--all`), wired into `run_all` as a gate alongside the legacy suite. `mm0_verify.py` is now legacy — moving to stock MM0 entirely; the swap is infra-complete and the **DecidableEq proof-size wall is broken** (opacity-for-defs: each `def` typed once via `htdef`, `list_dec_eq`/`list_dec_eq_poly` now fully certify), with the remaining tail down to one unsolved-metavar proof-gen gap + mm0-c store size for the deepest chain (see section at end) |
 
 ## What the pipeline does
 
@@ -1150,6 +1150,28 @@ faithfulness-guarded by cross-checking the `db_cert` normal form against
   any closed def; `gen_def_block` emits the `(lv: lvl)` binders (`DEFS_LVLS`).  This is
   why a def costs more than its opaque twin (typing inlines per use): `use_sym.{u}` 2796
   nodes vs 348 for the opaque version typed once.  No trusted-base change.
+- **Opacity for defs — type each `def` ONCE, reference it everywhere** (`opacity_def_demo.py`).
+  The fix above for the DefRef "typing inlines per use" cost, generalised to *every* def and
+  decoupled from computation.  A `def` is δ-transparent, so the certifier re-derived its
+  typing at every use site — and a `Decidable`-equality instance is a def whose typing is
+  large, so a proof that branches on it many times produced multi-MB certs over mm0-c's
+  store (the proof-SIZE wall).  Now each def gets ONE `htdef_<name> (g: ctx): ht g <name>
+  <type>` typing theorem, proved once, and every `prove_ht` of the def **references**
+  `(htdef_<name>)` — the exact opaque-lemma `htop` trick, sound for the same reason (a
+  CLOSED body types context-independently, so the theorem is g-polymorphic), but the def
+  **stays in DEFS** so `whnf` still δ-unfolds it to COMPUTE.  Lazy/memoized (`_ht_def_ref`):
+  a def gets an htdef only the first time it is actually typed — one used purely for
+  reduction stays a plain def, so no new failure mode (reached iff the old
+  `prove_ht(DEFS[name])` inline was).  Reference is BARE (the `(lv: lvl)` binders, like
+  `(g: ctx)`, are metavariables MM0 unifies from the conclusion).  `gen_all_blocks`
+  dispatches by registry membership, so a lazily-promoted def emits its `def` + `htdef`
+  with no `EMIT_ORDER` mutation.  **No trusted axiom, db.mm1 byte-identical.**  This takes
+  `list_dec_eq` / `list_dec_eq_poly` from the proof-size wall to FULLY CERTIFIED by both
+  checkers; in `list_dec_eq`, 12 defs typed once are referenced 252× (Nat.decEq typed once,
+  used 20×) — ~15× fewer typing nodes than inlining.  (Plus a **symmetric `_coerce`**: the
+  bound level param may be on the `have` side; and **`_as_sort`**: `ht_pi`/`ht_lam` premises
+  must be a *literal* `esort`, so a stuck recursor-result / `tlist @ A` sort is normalised +
+  coerced rather than crashing `'App'.lvl`.)
 - **Universe-polymorphic inductive used at a generic level** (`poly_ind_gen_demo.py`).
   The third leg, and the cleanest: an inductive's **term constructors are already
   level-agnostic** in db.mm1 (the level rides the generated typing/ι axioms — `refl_eq`
@@ -1218,33 +1240,43 @@ chaining** (`envcert_worker` accepts `prereqs…, target`; `verify.py --chain` +
 map mirroring the legacy `_run_example` chains) so the stock verifier can reach the ~19
 examples that build on another file's decls.
 (3) ⬜ **Retire `mm0_verify.py`** — **blocked on full parity**, not yet safe; closing in.
-`verify.py --all --chain` now reaches **53 verified, 5 partial, 1 rejected** (run it for
-live numbers).  ✅ The **emission-ordering** bug is fixed — defs/opaque-lemmas/axioms now
-emit in one dependency-ordered stream (`db_cert.EMIT_ORDER`/`gen_all_blocks`), since they
-interdepend (a def can cite an opaque lemma whose body cites a def); that cleared the
-`option_ops` and `decidable_eq_chain` rejections (the "shf mismatch" was the same
-ordering bug — a not-yet-declared def couldn't unfold in a shf goal).  Remaining gaps,
-all in the **DecidableEq machinery** the legacy full-stdlib path still covers:
-  - `nat_dec_le` — REJECTED: db_cert emits a proof with an **unsolved `expr` metavar**
-    (`?i`) near a `deq_beta`/`ht_conv` (a genuine proof-generation gap, not ordering);
-  - `decidable_eq` / `list_mem` — PARTIAL: an `AttributeError:App` in the bridge;
-  - `decidable_eq_chain` / `list_dec_eq` / `list_dec_eq_poly` — PARTIAL: `ValueError:param`
-    — **traced to a proof-SIZE wall, not a bug.**  The skip is closable on
-    db_cert/mm0-rs by a *symmetric* `_coerce` (the level param can be on the `have`
-    side — a poly inductive applied at a concrete level, where db_cert carries the
-    tycon's result level as the generic `v` but MM0 has unified `v := 1`; emit bare,
-    MM0 unifies, fail-safe).  That was tried and **reverted**: it is sound and
-    regression-free on the saturated sweeps, but it only unblocks these huge poly-list
-    `DecidableEq` proofs, whose `Decidable` *instances are defs* (δ-transparent) so
-    their typing is **inlined at every use** → 5 MB+ certs that exceed mm0-c-np's store
-    (>256 MB) and time (>2 min).  The real fix is **proof-size reduction — opacity for
-    the def machinery** (treat selected defs like opaque lemmas, typed once), a
-    substantial separate effort; until then these stay clean PARTIALs (the certified
-    subset passes both checkers).
-These classes are the remaining work before retiring the legacy verifier.  (The
-both-checkers invariant *rejected* the bad cert — never falsely accepted; db.mm1
-unchanged; mm0-c-np left at its stock 64 MB store.)
+Run `verify.py --all --chain` for live numbers.  ✅ The **emission-ordering** bug is fixed
+(defs/opaque-lemmas/axioms emit in one dependency-ordered stream,
+`db_cert.EMIT_ORDER`/`gen_all_blocks`), which cleared the `option_ops` rejection.
+✅ **The proof-SIZE wall is BROKEN** — **opacity for defs** (`df21369`).  A
+DELTA-TRANSPARENT `def` (e.g. a `Decidable`-equality instance) used to have its large
+typing **re-derived at every use site** → multi-MB certs over mm0-c's store.  Now each def
+is typed **ONCE** as a `htdef_<name> (g: ctx): ht g <name> <type>` theorem (the
+opaque-lemma `htop` trick, but the def stays in DEFS so whnf still δ-unfolds it to
+*compute*), and every `prove_ht` of it **references** `(htdef_<name>)` — lazy/memoized in
+`_ht_def_ref`, bare reference (the level binders are metavariables MM0 unifies from the
+conclusion).  Paired with the **symmetric `_coerce`** (the bound level param can be on the
+`have` side too — a poly inductive applied at a concrete level) and the **`_as_sort`** fix
+(`ht_pi`/`ht_lam` need their dom/body premises at a *literal* `esort`; a stuck
+recursor-result or `tlist @ A` sort previously crashed `'App'.lvl` — the old
+`AttributeError:App`).  No trusted axiom, db.mm1 byte-identical.  Effect on the
+**DecidableEq machinery**:
+  - `list_dec_eq` / `list_dec_eq_poly` — **PARTIAL → FULLY CERTIFIED by BOTH checkers.**
+    In `list_dec_eq`, 12 defs typed once but referenced 252× (Nat.decEq typed once, used
+    20×); typing nodes 312,973 inlined → 21,386 shared (~15×).  See `opacity_def_demo.py`.
+  - `decidable_eq_chain` — was ungeneratable (`ValueError:param`) → **now mm0-rs-clean
+    (`rs_rc=0`)**; mm0-c overflows its stock **64 MB** store (`cc_rc=255`).  This is a
+    pure **SIZE** limit on the minimal C checker for the 8-file-deep chain, **not** a
+    generator bug (mm0-rs has no such store cap and accepts the cert).
+  - `nat_dec_le`, and now `list_mem` / `decidable_eq` (the `AttributeError:App` crash is
+    fixed, so these bridge fully), all hit ONE remaining **unsolved-`expr`-metavar**
+    proof-generation gap (`(?f @ ?a) =?= tzero`, near a `deq_beta`/recursor gate — the
+    `?i` class of task #112).  The crash had **masked** it for `list_mem`/`decidable_eq`;
+    fixing the crash surfaces it.  These proofs are also enormous (List.decMem ~2.8 M+
+    chars), so they are *doubly* hard (gap **and** size).  This metavar gap is the single
+    remaining DecidableEq blocker — task #112.
+These are the remaining work before retiring the legacy verifier.  (The both-checkers
+invariant *rejected* every bad cert — never falsely accepted; db.mm1 unchanged; mm0-c-np
+left at its stock 64 MB store.)  Regression-free throughout: envcert **325/325**, coverage
+**149/149**, `verify.py --all` **40/40**, all both-checkers OK.
 Other *new* source shapes (orthogonal): mutual inductives; quotient types (`Quot`).
+mm0-c store headroom for the deepest chains (`decidable_eq_chain`) is its own orthogonal
+axis (the stock 64 MB is a *checker* parameter, not a soundness one).
 
 **Reproduce — and how the numbers are sourced.**  This section deliberately
 states *capabilities, not counts*: figures (proof-node sizes, how many
@@ -1273,6 +1305,9 @@ experiment `README.md`):
   `poly_def_gen_demo.py` (a universe-poly `def` at a GENERIC level — `mysym.{u}` via a
   `DefRef` that δ-unfolds), `poly_ind_gen_demo.py` (a universe-poly *inductive* at a
   GENERIC level — `structure Box.{u}`, registered level-generically),
+  `opacity_def_demo.py` (OPACITY FOR DEFS — runs the real `list_dec_eq` chain that was the
+  proof-size wall; derives that each `def` is typed once via `htdef` and shared, e.g.
+  Nat.decEq typed once / used 20×, ~15× fewer typing nodes than inlining, both checkers OK),
   `envcert_demo.py` (whole-environment cert: NON-equational decls — `Nat.le`
   reflexivity/transitivity over the indexed inductive, `choose` via `Decidable.rec`),
   `axiom_demo.py` (certify a proof *modulo* a source `axiom`, carried + reported),
