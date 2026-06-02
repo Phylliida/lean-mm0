@@ -13,10 +13,10 @@ outside the trust boundary.
 |---|---|
 | Tests | **126 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 59 parser examples), **+ a stock-MM0 verify gate** (`verify.py --all`); `run_all.py` runs all 5 stages |
 | Total source | ~7.6 kLoC Python + 188 LoC MM0 prelude + 3542 LoC `.lean` examples (59 files) |
-| Trusted base | **Legacy (production, being retired):** `src/mm0_verify.py` (710 LoC) + `prelude/cic.mm0` (188 LoC).  **Target (stock MM0):** `experiments/stock_mm0_cert/db.mm1` (CIC axioms) + the 815-line stock `mm0-c` — **no Python evaluator** (see `verify.py` + the stock-MM0 section) |
-| Repo | 177 commits on `master`; clean working tree |
+| Trusted base | **Legacy (production, being retired):** `src/mm0_verify.py` (710 LoC) + `prelude/cic.mm0` (188 LoC).  **Target (stock MM0, now at full corpus parity):** `experiments/stock_mm0_cert/db.mm1` (CIC axioms) + the 815-line stock `mm0-c` — **no Python evaluator**.  (mm0-c's fixed arenas `HEAP_SIZE`/`STACK_SIZE`/`UNIFY_HEAP_SIZE`→`1<<22`, `STORE_SIZE`→`1<<28` were enlarged to fit the largest certs; verifier *code* unchanged — a capacity, not a logic, change.)  (see `verify.py` + the stock-MM0 section) |
+| Repo | 178 commits on `master`; clean working tree |
 | Dev shell | `shell.nix` provides PyPy + CPython + bootstrapped `.venv` with pytest + xdist; tests in ~1.5 min on a multi-core box |
-| Stock-MM0 experiment | `experiments/stock_mm0_cert/` — certifying-emitter proof-of-concept: drop our βιζ evaluator, certify against **stock MM0** instead.  Now certifies not only reductions but **whole elaborated proofs** — induction, universe-polymorphism (defs, opaque lemmas, inductives all at generic levels), modular opaque-lemma chains, and proofs *modulo* source axioms; **whole-environment certification re-typechecks all 325/325 elaborated declarations** by the 815-line stock base. **`verify.py`** is the first-class entry point (`verify.py FILE.lean` / `--all`), wired into `run_all` as a gate alongside the legacy suite. `mm0_verify.py` is now legacy — moving to stock MM0 entirely; the swap is infra-complete and the **DecidableEq tail is now entirely mm0-rs-clean** (proof-size wall broken via opacity-for-defs; the recursor-ι param metavar gap fixed; `nat_dec_le`/`list_dec_eq`/`list_dec_eq_poly` fully certify on both checkers), with the **only** remaining blocker being mm0-c's stock 64 MB store size on the 3 biggest certs — an orthogonal checker-parameter axis, not a generator/soundness issue (see section at end) |
+| Stock-MM0 experiment | `experiments/stock_mm0_cert/` — certifying-emitter proof-of-concept: drop our βιζ evaluator, certify against **stock MM0** instead.  Now certifies not only reductions but **whole elaborated proofs** — induction, universe-polymorphism (defs, opaque lemmas, inductives all at generic levels), modular opaque-lemma chains, and proofs *modulo* source axioms; **whole-environment certification re-typechecks all 325/325 elaborated declarations** by the 815-line stock base. **`verify.py`** is the first-class entry point (`verify.py FILE.lean` / `--all`), wired into `run_all` as a gate alongside the legacy suite. `mm0_verify.py` is now legacy — moving to stock MM0 entirely.  **FULL CORPUS PARITY reached: `verify.py --all --chain` = 59 verified / 0 partial / 0 rejected** — every example certifies against stock MM0 (mm0-rs + mm0-c), the whole DecidableEq tail included (proof-size wall broken via opacity-for-defs; recursor-ι metavar gap fixed; mm0-c fixed arenas enlarged to fit the largest certs — *code* unchanged).  The proof-engineering for the swap is **done**; only the mechanical retirement of `mm0_verify.py` + the `lean.mm0` emitter path remains (see section at end) |
 
 ## What the pipeline does
 
@@ -1279,15 +1279,27 @@ recursor-result or `tlist @ A` sort previously crashed `'App'.lvl` — the old
     `decidable_eq`: metavar gone → **mm0-rs CLEAN**, now only mm0-c store-overflows on the
     large certs (like `decidable_eq_chain`).  **So every DecidableEq-tail file is now
     mm0-rs-clean; no proof-generation gap remains.**
-These were the remaining work before retiring the legacy verifier.  (The both-checkers
-invariant *rejected* every bad cert — never falsely accepted; db.mm1 unchanged; mm0-c-np
-left at its stock 64 MB store.)  Regression-free throughout: envcert **325/325**, coverage
-**149/149**, `verify.py --all` **40/40**, all both-checkers OK.
-**The ONLY thing now between the tail and retiring `mm0_verify.py` is mm0-c's 64 MB store
-size** on the three biggest certs (`decidable_eq_chain`, `list_mem`, `decidable_eq`): an
-orthogonal **checker-parameter** axis (the production Rust checker mm0-rs has no such cap
-and accepts them all; a bigger arena would not affect soundness — it never accepts a wrong
-proof).  Other *new* source shapes (orthogonal): mutual inductives; quotient types (`Quot`).
+  - ✅ **mm0-c arena sizes enlarged → FULL PARITY (`verify.py --all --chain` = 59 verified,
+    0 partial, 0 rejected).**  The three biggest certs (`decidable_eq_chain`, `list_mem`,
+    `decidable_eq`) were hitting **`HEAP_SIZE`** (mm0-c's save-heap of `Save`d expression
+    pointers, stock `65536`) — reported `at env_N: heap overflow` — *not* the store.  Bumped
+    the fixed checker arenas in `mm0/mm0-c/verifier_types.c`: `HEAP_SIZE`, `STACK_SIZE`,
+    `UNIFY_HEAP_SIZE` `65536 → 1<<22` (4 M entries) and `STORE_SIZE` `1<<26 → 1<<28` (64 →
+    256 MB); rebuilt `gcc main.c -O2 -D NO_PARSER -o mm0-c-np`.  This is a **checker-capacity**
+    change, **not** a logic/soundness one: the 815-line verifier *code* is byte-for-byte
+    unchanged (only `#define` constants on existing lines), bigger arenas never accept a wrong
+    proof (they only allow bigger proofs), and the production Rust checker mm0-rs needs no such
+    bump.  With it, **every one of the 59 example files certifies against stock MM0 (mm0-rs +
+    mm0-c)** — the DecidableEq tail included.  (The mm0-c change lives in the sibling `mm0`
+    repo, left uncommitted per the "git ops only in lean-mm0" rule; reproduce with the two
+    edits above.)
+**The proof-engineering work for the swap is COMPLETE: full corpus parity, both checkers.**
+db.mm1 (the CIC trusted base) is unchanged throughout; the both-checkers invariant rejected
+every bad cert along the way (never a false accept).  Regression-free: envcert **325/325**,
+coverage **149/149**, `verify.py --all` **40/40** (standalone gate), `verify.py --all --chain`
+**59/59** (full corpus).  What remains is the **mechanical retirement** of `mm0_verify.py` +
+the `lean.mm0` emitter path (delete + repoint `run_all`), now unblocked.  Other *new* source
+shapes (orthogonal, not corpus gaps): mutual inductives; quotient types (`Quot`).
 
 **Reproduce — and how the numbers are sourced.**  This section deliberately
 states *capabilities, not counts*: figures (proof-node sizes, how many
