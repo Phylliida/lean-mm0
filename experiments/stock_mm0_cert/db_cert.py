@@ -294,6 +294,15 @@ def _defref_unfold(e: "DefRef") -> T:
         body = inst_level(body, canon, use)
     return body
 
+def _spine_conv(head, old_args, new_args, ctx):
+    """Proof of `deq (curry head old_args) (curry head new_args)` -- a spine congruence
+    converting each differing argument (deq_refl where identical, prove_conv otherwise),
+    over a shared head.  Returns None if every argument already matches (a no-op)."""
+    proof = None                                  # deq_refl for the head
+    for o, n in zip(old_args, new_args):
+        proof = _app_cong(proof, None if o == n else prove_conv(o, n, ctx))
+    return proof
+
 def whnf(e: T, ctx=None):
     """Weak-head reduce; return (wh, conv|None) with conv proving deq G e wh.
     `ctx` (de-Bruijn binder types, innermost LAST) is threaded ONLY so the iota
@@ -359,22 +368,37 @@ def whnf(e: T, ctx=None):
                 cidx = CTOR_IX[mh.name][1]
                 c = ind.ctors[cidx]
                 if len(fargs) == P + len(c.fields):
+                    cparams = fargs[:P]               # the ctor's params (from the REDUCED major)
                     cfields = fargs[P:]
-                    rec_prefix = list(params) + [C] + list(minors)
-                    gate1 = prove_rec_partial_gen(ind, params, C, minors, ctx)
+                    # The deq_iota_<ctor> axiom shares ONE param p0 between the recursor
+                    # hypothesis (Decidable_rec @ p0 @ ...) and the ctor hypothesis
+                    # (Decidable_isFalse @ p0 @ ...), so they must be SYNTACTICALLY equal.
+                    # The recursor was applied to `params` (e.g. folded `Nat.lt 0 0`) but the
+                    # major reduced to a ctor with `cparams` (unfolded `Nat.le (succ 0) 0`);
+                    # these are DEF-EQUAL (the major's type forced it) yet differ when a param
+                    # holds a def, because mm0 delta-unfolds the def to an elam but does NOT
+                    # beta-reduce the resulting expr-level redex.  So convert the recursor's
+                    # params to cparams via a cong and build the gate at cparams (identity /
+                    # no-op when params == cparams, i.e. every previously-passing case).
+                    rec_pre_old = list(params)  + [C] + list(minors)
+                    rec_pre_new = list(cparams) + [C] + list(minors)
+                    pcong  = _spine_conv(head, rec_pre_old, rec_pre_new, ctx)
+                    cong_p = f"(deq_app {pcong} (deq_refl))" if pcong else None
+                    gate1 = prove_rec_partial_gen(ind, cparams, C, minors, ctx)
                     _t, gate2 = prove_ht(curry(Const(mh.name), fargs), ctx)
                     iota = f"(deq_iota_{mh.name} {gate1} {gate2})"
                     contr = curry(minors[cidx], cfields)
                     # recursive calls use each rec field's OWN index values (e.g.
                     # vcons's tail sits at index n, while the ctor outputs succ n)
-                    rc_map = dict(ind.rec_calls(cidx, params, cfields))
+                    rc_map = dict(ind.rec_calls(cidx, cparams, cfields))
                     for i, fl in enumerate(c.fields):
                         if fl.rec:
                             idxs = rc_map[i]
                             contr = App(contr,
-                                        curry(head, rec_prefix + idxs + [cfields[i]]))
+                                        curry(head, rec_pre_new + idxs + [cfields[i]]))
                     wc, cc = whnf(contr, ctx)
-                    return wc, _trans(cong_f, _trans(cong_mj, _trans(iota, cc)))
+                    return wc, _trans(cong_f, _trans(cong_mj,
+                                      _trans(cong_p, _trans(iota, cc))))
     return g, cong_f
 
 def prove_norm(e: T, ctx=None):
