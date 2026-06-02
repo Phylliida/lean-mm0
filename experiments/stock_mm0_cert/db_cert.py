@@ -75,6 +75,16 @@ OPAQUE  = {}   # opaque-lemma name -> (type T, body T, htop-proof str, lvls tupl
                # lemma cited at a generic level (def + htop carry `(lv_u: lvl)` binders
                # and a use is an OpaqueRef -> `(san lv_u)`).  See gen_opaque_block /
                # bridge.register_opaque.
+AXIOMS  = {}   # SOURCE-LEVEL axiom name -> (type T, lvls tuple).  A Lean `axiom` decl
+               # (e.g. propext / Classical.choice / a file's own `axiom Foo : T`) is a
+               # primitive constant with an ASSERTED typing and NO body.  Unlike a
+               # def/opaque-lemma (whose typing we PROVE), we CARRY it as an assumption
+               # -- faithfully, exactly as the Lean source declares it (and as Lean's
+               # own kernel trusts it).  Emitted as a `term <san>: expr;` + an mm0
+               # `axiom ht_<san>: ht g <san> <type>` (the source axiom), plus
+               # shf/sub-invariance (atomic, closed).  db.mm1 -- the CIC trusted base --
+               # is UNCHANGED; these are the *user development's* axioms, surfaced in the
+               # cert's axiom report.  See gen_axiom_block / bridge.register_axiom.
 
 def natlit(n: int) -> str:
     return "nO" if n == 0 else f"(nS {natlit(n-1)})"
@@ -394,6 +404,8 @@ def prove_ht(e: T, ctx):
     if isinstance(e, Const):
         # compare by NAME, not identity: a `tnat` inside a generated schema is a
         # fresh Const("tnat"), not the module singleton TNAT.
+        if e.name in AXIOMS:                          # source-level axiom: ASSERTED typing
+            return AXIOMS[e.name][0], f"(ht_{e.name})"   # (level-agnostic; MM0 unifies)
         if e.name in OPAQUE:                          # opaque lemma: type by REFERENCE
             # cite the once-proved `htop_<name>`, do NOT re-type the body -- re-typing
             # at every use is the super-linear blow-up `theorem`/opacity exists to
@@ -629,6 +641,29 @@ def gen_def_block() -> str:
         lvb = "".join(f" ({l}: lvl)" for l in DEFS_LVLS.get(name, ()))
         out.append(f"def {name}{lvb}: expr = $ {pp(body)} $;\n")
     return "".join(out)
+
+
+def gen_axiom_block() -> str:
+    """Emit each SOURCE-LEVEL axiom (a Lean `axiom` decl) as a primitive expr constant
+    plus its typing as an mm0 axiom -- the user development's assumption, carried
+    faithfully.  Distinct from gen_opaque_block: an opaque lemma's typing is PROVED (it
+    has a body); a source axiom's is ASSERTED (it has none), exactly as the Lean source
+    -- and Lean's own kernel -- assume it.  db.mm1 (the CIC trusted base) is unchanged;
+    these axioms are listed in the cert's axiom report so what is assumed is explicit.
+    The constant is atomic (shift/subst-invariant), and the typing axiom binds the
+    universe params its type mentions, so a use at `.{1,0}` or generic `.{u,0}` both
+    resolve to the same const (MM0 unifies the levels on the typing axiom)."""
+    import re as _re
+    out = []
+    for san, (ty, lvls) in AXIOMS.items():
+        tys = pp(ty)
+        lvb = "".join(f" ({l}: lvl)" for l in lvls
+                      if _re.search(r"\b" + _re.escape(l) + r"\b", tys))
+        out.append(f"term {san}: expr;")
+        out.append(f"axiom shf_{san} (d c: nat): $ shf {san} d c {san} $;")
+        out.append(f"axiom sub_{san} (v: expr) (j: nat): $ sub {san} v j {san} $;")
+        out.append(f"axiom ht_{san} (g: ctx){lvb}: $ ht g {san} {tys} $;")
+    return "\n".join(out) + ("\n" if out else "")
 
 
 def gen_opaque_block() -> str:

@@ -111,11 +111,14 @@ def main():
         prelude     = open(f"{HERE}/db.mm1").read()
         defblock    = db_cert.gen_def_block()
         opaqueblock = db_cert.gen_opaque_block()
+        axiomblock  = db_cert.gen_axiom_block()   # source-level axioms, carried as assumptions
         ind_blocks  = "".join(bridge.IND_EMITTED)
         thms = [f"theorem env_{i}{c['binders']}: $ ht cnil {c['body']} {c['type']} $ =\n'{c['proof']};\n"
                 for i, c in enumerate(certified)]
-        full = (prelude + "\n" + blocks + "\n" + ind_blocks + "\n" + defblock + "\n"
-                + opaqueblock + "\n" + "\n".join(thms))
+        # axioms' types reference inductives (-> after blocks/ind_blocks); defs/opaque
+        # lemmas may cite an axiom (-> axiomblock before them).
+        full = (prelude + "\n" + blocks + "\n" + ind_blocks + "\n" + axiomblock + "\n"
+                + defblock + "\n" + opaqueblock + "\n" + "\n".join(thms))
         mm1 = f"/tmp/env_{base}.mm1"; mmb = f"/tmp/env_{base}.mmb"
         open(mm1, "w").write(full)
         r = subprocess.run([MM0RS, "compile", mm1, mmb], capture_output=True, text=True)
@@ -126,10 +129,11 @@ def main():
             cc_rc = -1
             open(f"/tmp/env_{base}.err", "w").write(r.stdout[-3000:] + "\n" + r.stderr[-3000:])
 
+    axioms_csv = ",".join(sorted(db_cert.AXIOMS)) if certified else "-"
     print("RESULT %s elaborated=%d decls=%d certified=%d skipped=%d rs_rc=%d cc_rc=%d "
-          "nodes=%s reasons=%s" %
+          "nodes=%s reasons=%s axioms=%s" %
           (base, len(added), decls, len(certified), len(skipped),
-           rs_rc, cc_rc, nodes_csv or "-", reasons_csv or "-"))
+           rs_rc, cc_rc, nodes_csv or "-", reasons_csv or "-", axioms_csv or "-"))
 
 
 if __name__ == "__main__":

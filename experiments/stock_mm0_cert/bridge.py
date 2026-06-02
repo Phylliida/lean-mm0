@@ -229,6 +229,10 @@ def to_db(e) -> object:
         if _ENV is not None and _ENV.has(e.name) \
            and type(_ENV.get(e.name)).__name__ == "Theorem":
             return register_opaque(_ENV, e.name, e.levels)
+        # lazy: a source-level `axiom` (no body) -> carry it as an assumption.
+        if _ENV is not None and _ENV.has(e.name) \
+           and type(_ENV.get(e.name)).__name__ == "Axiom":
+            return register_axiom(_ENV, e.name)
         raise Unsupported(f"Const {e.name!r} (outside the bridged fragments)")
     raise Unsupported(f"{type(e).__name__}")
 
@@ -437,6 +441,44 @@ def register_opaque(env, name, levels=()):
         db_cert.OPAQUE[san] = (ty, body, proof, ())   # check the body ONCE
     except Exception:
         CONST_MAP.pop(name, None); db_cert.OPAQUE.pop(san, None); raise
+    return CONST_MAP[name]
+
+
+def register_axiom(env, name):
+    r"""Register a Lean `axiom` decl as a SOURCE-LEVEL axiom: a primitive constant with
+    an ASSERTED typing and no body, CARRIED as an assumption in the certificate.
+
+    This is the honest treatment of an axiom -- contrast the opaque-lemma path
+    (register_opaque), which PROVES a `theorem`'s typing because it has a body.  An
+    axiom has none, so there is nothing to prove; we faithfully assert its typing,
+    exactly as the Lean source declares it AND as Lean's own kernel trusts it.  The
+    certificate is then valid *modulo* the source's declared axioms (propext /
+    Classical.choice / Quot.sound / a file's own `axiom`), which is precisely what a
+    proof checker should do -- and the workers surface the assumed axioms in a report
+    (the stock-MM0 analogue of `#print axioms`).  db.mm1 -- the CIC trusted base --
+    stays UNCHANGED: a source axiom is the *user development's* assumption, never a new
+    CIC inference rule.
+
+    Level-agnostic in the term (the levels ride the typing axiom, like an inductive's
+    constructors), so a use at `.{1,0}` or generic `.{u,0}` both resolve to the same
+    const; MM0 unifies the levels via `ht_<san>`."""
+    global _ENV
+    _ENV = env
+    d = env.get(name)
+    if type(d).__name__ != "Axiom":
+        raise Unsupported(f"{name!r} is not an Axiom ({type(d).__name__})")
+    san = sanitize(name)
+    if san in db_cert.AXIOMS:
+        return TConst(san)
+    canon = tuple(level_param_name(p) for p in d.level_params)
+    CONST_MAP[name] = TConst(san)            # placeholder first (so the type bridges)
+    try:
+        ty = to_db(d.type_)                  # bridged in the axiom's OWN params (-> lv_u)
+        db_cert.AXIOMS[san] = (ty, canon)
+        db_cert.ATOMIC.add(san)              # atomic: shift/subst-invariant
+    except Exception:
+        CONST_MAP.pop(name, None); db_cert.AXIOMS.pop(san, None)
+        db_cert.ATOMIC.discard(san); raise
     return CONST_MAP[name]
 
 

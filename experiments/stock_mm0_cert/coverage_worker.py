@@ -251,6 +251,7 @@ def main():
         # so its def + once-checked htop must be emitted too (else the cert would
         # reference an undefined symbol and break the both-checkers invariant).
         opaqueblock = db_cert.gen_opaque_block()
+        axiomblock  = db_cert.gen_axiom_block()   # source-level axioms, carried as assumptions
         # two cert shapes coexist per file: de-refl LEAVES (`deq G lhs rhs`, what
         # Eq.refl discharges) and whole PROOF TERMS (`ht cnil body type`, induction /
         # case analysis), both checked by both checkers.
@@ -263,7 +264,7 @@ def main():
         # auto-derived during this file's certification; they must precede the
         # defblock (projections/instances) that reference them.
         ind_blocks = "".join(bridge.IND_EMITTED)
-        full = (prelude + "\n" + blocks + "\n" + ind_blocks + "\n"
+        full = (prelude + "\n" + blocks + "\n" + ind_blocks + "\n" + axiomblock + "\n"
                 + defblock + "\n" + opaqueblock + "\n" + "\n".join(thms))
         mm1 = f"/tmp/cov_{base}.mm1"; mmb = f"/tmp/cov_{base}.mmb"
         open(mm1, "w").write(full)
