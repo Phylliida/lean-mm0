@@ -11,12 +11,12 @@ outside the trust boundary.
 
 | | |
 |---|---|
-| Tests | **126 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 59 parser examples) |
+| Tests | **126 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 59 parser examples), **+ a stock-MM0 verify gate** (`verify.py --all`); `run_all.py` runs all 5 stages |
 | Total source | ~7.6 kLoC Python + 188 LoC MM0 prelude + 3542 LoC `.lean` examples (59 files) |
-| Trusted base | `src/mm0_verify.py` (710 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 172 commits on `master`; clean working tree |
+| Trusted base | **Legacy (production, being retired):** `src/mm0_verify.py` (710 LoC) + `prelude/cic.mm0` (188 LoC).  **Target (stock MM0):** `experiments/stock_mm0_cert/db.mm1` (CIC axioms) + the 815-line stock `mm0-c` — **no Python evaluator** (see `verify.py` + the stock-MM0 section) |
+| Repo | 173 commits on `master`; clean working tree |
 | Dev shell | `shell.nix` provides PyPy + CPython + bootstrapped `.venv` with pytest + xdist; tests in ~1.5 min on a multi-core box |
-| Stock-MM0 experiment | `experiments/stock_mm0_cert/` — certifying-emitter proof-of-concept: drop our βιζ evaluator, certify against **stock MM0** instead.  Now certifies not only reductions but **whole elaborated proofs** — induction, universe-polymorphism (defs, opaque lemmas, inductives all at generic levels), modular opaque-lemma chains, and proofs *modulo* source axioms; **whole-environment certification re-typechecks all 325/325 elaborated declarations** by the 815-line stock base. `mm0_verify.py` is now legacy — moving to stock MM0 entirely (see section at end) |
+| Stock-MM0 experiment | `experiments/stock_mm0_cert/` — certifying-emitter proof-of-concept: drop our βιζ evaluator, certify against **stock MM0** instead.  Now certifies not only reductions but **whole elaborated proofs** — induction, universe-polymorphism (defs, opaque lemmas, inductives all at generic levels), modular opaque-lemma chains, and proofs *modulo* source axioms; **whole-environment certification re-typechecks all 325/325 elaborated declarations** by the 815-line stock base. **`verify.py`** is the first-class entry point (`verify.py FILE.lean` / `--all`), wired into `run_all` as a gate alongside the legacy suite. `mm0_verify.py` is now legacy — moving to stock MM0 entirely; the swap is infra-complete, blocked on a hard DecidableEq tail (see section at end) |
 
 ## What the pipeline does
 
