@@ -14,9 +14,9 @@ outside the trust boundary.
 | Tests | **126 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 59 parser examples), **+ a stock-MM0 verify gate** (`verify.py --all`); `run_all.py` runs all 5 stages |
 | Total source | ~7.6 kLoC Python + 188 LoC MM0 prelude + 3542 LoC `.lean` examples (59 files) |
 | Trusted base | **Legacy (production, being retired):** `src/mm0_verify.py` (710 LoC) + `prelude/cic.mm0` (188 LoC).  **Target (stock MM0):** `experiments/stock_mm0_cert/db.mm1` (CIC axioms) + the 815-line stock `mm0-c` — **no Python evaluator** (see `verify.py` + the stock-MM0 section) |
-| Repo | 175 commits on `master`; clean working tree |
+| Repo | 177 commits on `master`; clean working tree |
 | Dev shell | `shell.nix` provides PyPy + CPython + bootstrapped `.venv` with pytest + xdist; tests in ~1.5 min on a multi-core box |
-| Stock-MM0 experiment | `experiments/stock_mm0_cert/` — certifying-emitter proof-of-concept: drop our βιζ evaluator, certify against **stock MM0** instead.  Now certifies not only reductions but **whole elaborated proofs** — induction, universe-polymorphism (defs, opaque lemmas, inductives all at generic levels), modular opaque-lemma chains, and proofs *modulo* source axioms; **whole-environment certification re-typechecks all 325/325 elaborated declarations** by the 815-line stock base. **`verify.py`** is the first-class entry point (`verify.py FILE.lean` / `--all`), wired into `run_all` as a gate alongside the legacy suite. `mm0_verify.py` is now legacy — moving to stock MM0 entirely; the swap is infra-complete and the **DecidableEq proof-size wall is broken** (opacity-for-defs: each `def` typed once via `htdef`, `list_dec_eq`/`list_dec_eq_poly` now fully certify), with the remaining tail down to one unsolved-metavar proof-gen gap + mm0-c store size for the deepest chain (see section at end) |
+| Stock-MM0 experiment | `experiments/stock_mm0_cert/` — certifying-emitter proof-of-concept: drop our βιζ evaluator, certify against **stock MM0** instead.  Now certifies not only reductions but **whole elaborated proofs** — induction, universe-polymorphism (defs, opaque lemmas, inductives all at generic levels), modular opaque-lemma chains, and proofs *modulo* source axioms; **whole-environment certification re-typechecks all 325/325 elaborated declarations** by the 815-line stock base. **`verify.py`** is the first-class entry point (`verify.py FILE.lean` / `--all`), wired into `run_all` as a gate alongside the legacy suite. `mm0_verify.py` is now legacy — moving to stock MM0 entirely; the swap is infra-complete and the **DecidableEq tail is now entirely mm0-rs-clean** (proof-size wall broken via opacity-for-defs; the recursor-ι param metavar gap fixed; `nat_dec_le`/`list_dec_eq`/`list_dec_eq_poly` fully certify on both checkers), with the **only** remaining blocker being mm0-c's stock 64 MB store size on the 3 biggest certs — an orthogonal checker-parameter axis, not a generator/soundness issue (see section at end) |
 
 ## What the pipeline does
 
@@ -1263,20 +1263,31 @@ recursor-result or `tlist @ A` sort previously crashed `'App'.lvl` — the old
     (`rs_rc=0`)**; mm0-c overflows its stock **64 MB** store (`cc_rc=255`).  This is a
     pure **SIZE** limit on the minimal C checker for the 8-file-deep chain, **not** a
     generator bug (mm0-rs has no such store cap and accepts the cert).
-  - `nat_dec_le`, and now `list_mem` / `decidable_eq` (the `AttributeError:App` crash is
-    fixed, so these bridge fully), all hit ONE remaining **unsolved-`expr`-metavar**
-    proof-generation gap (`(?f @ ?a) =?= tzero`, near a `deq_beta`/recursor gate — the
-    `?i` class of task #112).  The crash had **masked** it for `list_mem`/`decidable_eq`;
-    fixing the crash surfaces it.  These proofs are also enormous (List.decMem ~2.8 M+
-    chars), so they are *doubly* hard (gap **and** size).  This metavar gap is the single
-    remaining DecidableEq blocker — task #112.
-These are the remaining work before retiring the legacy verifier.  (The both-checkers
+  - ✅ **The unsolved-`expr`-metavar proof-gen gap (#112) is FIXED** (`10a3146`).  Root
+    cause: a `deq_iota_<ctor>` axiom shares ONE param `p0` between the recursor hypothesis
+    (`Decidable_rec @ p0 @ …`) and the constructor hypothesis (`Decidable_isFalse @ p0 @ …`),
+    so they must be *syntactically* equal.  But `ite (Nat.lt 0 0) (Nat.decLt 0 0) …` applies
+    the recursor with the **folded** param `Nat.lt 0 0`, while the instance reduces to a
+    constructor with the **unfolded** param `Nat.le (succ 0) 0` (`decLt n m := decLe (succ n) m`);
+    these are def-equal but differ syntactically, and mm0 δ-unfolds the def `Nat.lt` to an
+    `elam` yet does **not** β-reduce the resulting expr-level redex → `(?f @ ?a) =?= tzero`.
+    (Plain `Nat.le` decidability passed because its param carries no def.)  Fix: `whnf`'s
+    generated-inductive ι branch reconciles the recursor's params with the constructor's
+    reduced params via a spine congruence (`_spine_conv`) before the ι-gate, and builds the
+    gate at the constructor's params — a no-op when they already match, so zero regression.
+    **`nat_dec_le.lean`: REJECTED → FULLY CERTIFIED by BOTH checkers (12/12).**  `list_mem` /
+    `decidable_eq`: metavar gone → **mm0-rs CLEAN**, now only mm0-c store-overflows on the
+    large certs (like `decidable_eq_chain`).  **So every DecidableEq-tail file is now
+    mm0-rs-clean; no proof-generation gap remains.**
+These were the remaining work before retiring the legacy verifier.  (The both-checkers
 invariant *rejected* every bad cert — never falsely accepted; db.mm1 unchanged; mm0-c-np
 left at its stock 64 MB store.)  Regression-free throughout: envcert **325/325**, coverage
 **149/149**, `verify.py --all` **40/40**, all both-checkers OK.
-Other *new* source shapes (orthogonal): mutual inductives; quotient types (`Quot`).
-mm0-c store headroom for the deepest chains (`decidable_eq_chain`) is its own orthogonal
-axis (the stock 64 MB is a *checker* parameter, not a soundness one).
+**The ONLY thing now between the tail and retiring `mm0_verify.py` is mm0-c's 64 MB store
+size** on the three biggest certs (`decidable_eq_chain`, `list_mem`, `decidable_eq`): an
+orthogonal **checker-parameter** axis (the production Rust checker mm0-rs has no such cap
+and accepts them all; a bigger arena would not affect soundness — it never accepts a wrong
+proof).  Other *new* source shapes (orthogonal): mutual inductives; quotient types (`Quot`).
 
 **Reproduce — and how the numbers are sourced.**  This section deliberately
 states *capabilities, not counts*: figures (proof-node sizes, how many
