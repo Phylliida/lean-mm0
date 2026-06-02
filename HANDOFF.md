@@ -14,9 +14,9 @@ outside the trust boundary.
 | Tests | **126 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 59 parser examples) |
 | Total source | ~7.6 kLoC Python + 188 LoC MM0 prelude + 3542 LoC `.lean` examples (59 files) |
 | Trusted base | `src/mm0_verify.py` (710 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 105 commits on `master`; clean working tree |
+| Repo | 151 commits on `master`; clean working tree |
 | Dev shell | `shell.nix` provides PyPy + CPython + bootstrapped `.venv` with pytest + xdist; tests in ~1.5 min on a multi-core box |
-| Stock-MM0 experiment | `experiments/stock_mm0_cert/` — certifying-emitter proof-of-concept: drop our βιζ evaluator, certify reductions against **stock MM0** instead (see section at end) |
+| Stock-MM0 experiment | `experiments/stock_mm0_cert/` — certifying-emitter proof-of-concept: drop our βιζ evaluator, certify against **stock MM0** instead.  Now certifies not only reductions but **whole elaborated proofs** — induction, universe-polymorphism, and modular opaque-lemma chains (see section at end) |
 
 ## What the pipeline does
 
@@ -937,11 +937,18 @@ generation.
 
 ### Status / honest scope
 
-The arc answers the original question **yes, for CIC's core**, and now reaches
-real source.  What works (each with a runnable demo under
-`experiments/stock_mm0_cert/`, every certificate checked by **both** mm0-rs and
-the 815-line **mm0-c**, and faithfulness-guarded by cross-checking the `db_cert`
-normal form against `src/kernel.py`'s own whnf):
+The arc answers the original question **yes, for CIC's core**, reaches real source,
+and now goes past reductions to **whole elaborated proofs**: a proof that uses the
+induction hypothesis (`add_comm`), a **universe-polymorphic** proof (`my_eq_symm.{u}`),
+and a **modular** proof chain whose cited lemmas are checked once and used by
+reference — all certified against the 815-line kernel, and (a standing property of
+the entire arc) **with zero changes to the trusted base** (`db.mm1` + the stock
+checkers): every step is a *generated proof*, never a new axiom.
+
+What works (each with a runnable demo under `experiments/stock_mm0_cert/`, every
+certificate checked by **both** mm0-rs and the 815-line **mm0-c**, and
+faithfulness-guarded by cross-checking the `db_cert` normal form against
+`src/kernel.py`'s own whnf):
 
 - **The whole inductive spectrum** — Nat, Bool, parametric List, indexed Eq (J
   eliminator), recursive-indexed Vec — via the certifier (`db_cert.py`) and the
