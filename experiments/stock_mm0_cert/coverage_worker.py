@@ -121,6 +121,34 @@ def _reason(prefix, ex):
     return prefix + (":" + tok if tok else "")
 
 
+def try_proofterm(env, d, name):
+    """A NOT-convertible Eq obligation is not a de-refl leaf -- it is a whole proof
+    (induction / case analysis / transport).  Certify it the proof-term way: TYPE the
+    decl's entire elaborated proof term against its stated type, `ht cnil <value>
+    <type>` (db_cert.prove_ht + a final _coerce).  This is exactly proofterm_worker's
+    core, now reachable from the sweep.  Returns a cert record (kind="ht"), None if the
+    decl has no proof body (an axiom), or RAISES if the body is out of the bridged
+    fragment (caught by the caller -> a precise skip reason that names the next gap)."""
+    val = getattr(d, "value", None)
+    if val is None:
+        return None
+    for c in sorted(consts_in(val, set()) | consts_in(d.type_, set())):
+        if c != name and env.has(c) and type(env.get(c)).__name__ == "Definition" \
+           and not env.get(c).level_params:
+            bridge.register_def(env, c)
+    dty   = bridge.to_db(d.type_)
+    dbody = bridge.to_db(val)
+    tb, pb = db_cert.prove_ht(dbody, [])          # type the whole proof term
+    proof  = db_cert._coerce(pb, tb, dty, [])     # coerce inferred -> stated type
+    bodys, tys = db_cert.pp(dbody), db_cert.pp(dty)
+    lps = [bridge.level_param_name(p) for p in (getattr(d, "level_params", ()) or ())]
+    blob = bodys + tys + proof
+    binders = "".join(f" ({p}: lvl)" for p in lps
+                      if re.search(r"\b" + re.escape(p) + r"\b", blob))
+    return {"kind": "ht", "name": name, "binders": binders, "body": bodys,
+            "type": tys, "proof": proof, "nodes": db_cert.proof_nodes(proof)}
+
+
 def main():
     fname = sys.argv[1]
     base = os.path.basename(fname)
@@ -165,7 +193,12 @@ def main():
             _Ao, olhs, orhs = eq_obligation(obody)
             kl = kernel_nf(K, olhs, octx); kr = kernel_nf(K, orhs, octx)
             if kl != kr:
-                skipped.append("not-convertible"); continue
+                # not a de-refl leaf: certify the WHOLE proof term (ht cnil body type)
+                # instead of skipping.  None -> no proof body (axiom), genuinely skip.
+                pt = try_proofterm(env, d, name)
+                if pt is None:
+                    skipped.append("not-convertible"); continue
+                certified.append(pt); continue
             val = numval(kl)                  # may be None (free var / not a numeral)
             for c in sorted(consts_in(lhs, set()) | consts_in(rhs, set())):
                 if env.has(c) and type(env.get(c)).__name__ == "Definition" \
@@ -197,15 +230,16 @@ def main():
             blob = G + dls + drs + conv
             binders = "".join(f" ({p}: lvl)" for p in lps
                               if re.search(r"\b" + re.escape(p) + r"\b", blob))
-            certified.append((name, val, binders, G, dls, drs, conv,
-                              db_cert.proof_nodes(conv)))
+            certified.append({"kind": "deq", "name": name, "binders": binders,
+                              "G": G, "dl": dls, "dr": drs, "conv": conv,
+                              "nodes": db_cert.proof_nodes(conv)})
         except bridge.Unsupported as ex:
             skipped.append(_reason("unsup", ex))
         except Exception as ex:
             skipped.append(_reason(type(ex).__name__, ex))
 
     obligs = len(certified) + len(skipped)
-    nodes_csv = ",".join(str(n) for *_r, n in certified)
+    nodes_csv = ",".join(str(c["nodes"]) for c in certified)
     reasons_csv = ",".join(sorted(set(skipped)))
 
     rs_rc = cc_rc = -2
@@ -217,8 +251,14 @@ def main():
         # so its def + once-checked htop must be emitted too (else the cert would
         # reference an undefined symbol and break the both-checkers invariant).
         opaqueblock = db_cert.gen_opaque_block()
-        thms = [f"theorem cov_{i}{binders}: $ deq {G} {dl} {dr} $ =\n'{conv};\n"
-                for i, (nm, val, binders, G, dl, dr, conv, nodes) in enumerate(certified)]
+        # two cert shapes coexist per file: de-refl LEAVES (`deq G lhs rhs`, what
+        # Eq.refl discharges) and whole PROOF TERMS (`ht cnil body type`, induction /
+        # case analysis), both checked by both checkers.
+        def _thm(i, c):
+            if c["kind"] == "deq":
+                return f"theorem cov_{i}{c['binders']}: $ deq {c['G']} {c['dl']} {c['dr']} $ =\n'{c['conv']};\n"
+            return f"theorem cov_{i}{c['binders']}: $ ht cnil {c['body']} {c['type']} $ =\n'{c['proof']};\n"
+        thms = [_thm(i, c) for i, c in enumerate(certified)]
         # bridge.IND_EMITTED holds blocks for any user inductive (class/structure)
         # auto-derived during this file's certification; they must precede the
         # defblock (projections/instances) that reference them.

@@ -73,8 +73,9 @@ def main():
     print("\n## Headline (regenerated this run)\n")
     print(f"- {len(rows)} example files swept; {len(ok)} elaborate here, {len(err)} do not")
     print(f"  (the latter reference decls this standalone build_stdlib lacks -- a harness gap).")
-    print(f"- {obl} de-refl obligations (Eq over any type) across the elaborated files;")
-    print(f"  {cert} certified through stock mm0-c, {skip} skipped (out of bridged fragment).")
+    print(f"- {obl} Eq obligations (Eq over any type) across the elaborated files;")
+    print(f"  {cert} certified through stock mm0-c -- by de-refl CONVERSION (the rfl leaves)")
+    print(f"  OR whole-proof TYPING (induction / case analysis) -- {skip} skipped (out of fragment).")
     print(f"- {withc} files with >=1 certified obligation ({full} fully, {part} partially).")
     print(f"- invariant 'every certified file passes BOTH mm0-rs and mm0-c': "
           f"{'OK' if not bad else 'VIOLATED ' + ','.join(bad)}")

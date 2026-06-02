@@ -20,13 +20,18 @@ the sweep.  For each file the worker:
 1. runs the **real** pipeline — `src.lean_parser.elaborate` (parser → elaborator
    → kernel) — so we measure against actually-elaborated terms, not hand-built
    ones;
-2. auto-detects every *de-refl obligation*: an elaborated decl whose type is
-   `Eq Nat lhs rhs` over closed Nat (the `by rfl` / `Eq.refl` goals that hold by
-   computation);
-3. registers the defs each side uses (monomorphic + universe-polymorphic via the
-   bridge), bridges `lhs`, and certifies `deq cnil lhs rhs` through **stock
-   mm0-c** — with the db_cert normal form cross-checked against `src/kernel.py`'s
-   own whnf (the faithfulness guard);
+2. auto-detects every *Eq obligation*: an elaborated decl whose type is
+   `Eq A lhs rhs` for **any** type `A` (Nat, Bool, List, Vec, …), possibly under a
+   free-variable Π-telescope or a universe parameter;
+3. certifies it through **stock mm0-c** by one of two routes, picked by the real
+   kernel:
+   - if the two sides **convert** (a `by rfl` / `Eq.refl` leaf), it bridges both
+     and certifies `deq <ctx> lhs rhs` by conversion — with the db_cert normal form
+     cross-checked against `src/kernel.py`'s own whnf (the faithfulness guard);
+   - if they **don't** (the obligation needs a real proof — induction, case
+     analysis, transport), it types the decl's **whole proof term** against its
+     stated type, `ht cnil <value> <type>` (the proof-term track), so the proof is
+     faithful by construction (it is the kernel's own elaborated term and type);
 4. counts each obligation as *certified* or *skipped* (with a reason), catching
    any per-obligation error so one bad goal never aborts the file.
 
