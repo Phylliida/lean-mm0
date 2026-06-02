@@ -69,6 +69,18 @@ DEFS_LVLS = {} # def name -> tuple of LEVEL binder names, for a UNIVERSE-POLYMOR
                # def used at a GENERIC level (emitted `def san (lv: lvl): expr = body`,
                # referenced as a DefRef -> `(san lv..)`).  Absent for a mono def (no
                # level binders).  See gen_def_block / bridge.register_def.
+DEF_HT  = {}   # def name -> (inferred type T, htdef-proof str).  OPACITY FOR DEFS: a def
+               # is still in DEFS (so whnf delta-unfolds it for COMPUTATION), but its
+               # TYPING is derived ONCE -- emitted as `theorem htdef_<name> (g: ctx): ht g
+               # <name> <type>` -- and every prove_ht of the def references `(htdef_<name>)`
+               # instead of re-typing the body at each use.  This is the exact analogue of
+               # the opaque-lemma htop (a CLOSED body types context-independently, so the
+               # one theorem is g-polymorphic), but the def stays DELTA-TRANSPARENT for
+               # reduction.  Populated LAZILY by _ht_def_ref the first time a def is typed
+               # (so a def used only computationally, never typed, stays a plain def).  This
+               # is the proof-SIZE fix for the DecidableEq machinery, whose Decidable
+               # instances are defs whose typing was otherwise inlined at every use site
+               # (5 MB+ certs).  No trusted axiom, no trusted-base change.
 OPAQUE  = {}   # opaque-lemma name -> (type T, body T, htop-proof str, lvls tuple).  A
                # `theorem` (opaque proof) is checked ONCE -- emitted as an mm0 `def`
                # plus a `htop_<name> (g: ctx): ht g <body> <type>` theorem
@@ -113,7 +125,7 @@ def add_axiom(san, ty, lvls):
 def _unregister(kind, san):
     """Roll back a partial registration (used by bridge's atomic except-clauses)."""
     {"def": DEFS, "opaque": OPAQUE, "axiom": AXIOMS}[kind].pop(san, None)
-    if kind == "def":   DEFS_LVLS.pop(san, None)
+    if kind == "def":   DEFS_LVLS.pop(san, None); DEF_HT.pop(san, None)
     if kind == "axiom": ATOMIC.discard(san)
     if (kind, san) in EMIT_ORDER: EMIT_ORDER.remove((kind, san))
 
@@ -416,6 +428,30 @@ def _conv_structural(A: T, B: T, ctx):
     raise ValueError(f"cannot convert:\n  {pp(A)}\n  {pp(B)}")
 
 # ---------------- typing certifier:  ht <ctx> e T ----------------
+def _ht_def_ref(name, lvls=()):
+    """Type a def by REFERENCE to a once-proved `htdef_<name>` theorem (OPACITY FOR
+    DEFS).  The def stays in DEFS, so whnf still delta-unfolds it for COMPUTATION; here
+    we only avoid re-typing its body at every use.  Returns (type, "(htdef_<name> lv..)").
+
+    Soundness/equivalence: a def's body is CLOSED, and prove_ht of a closed term is
+    independent of the incoming context (only Var consults ctx, and a closed body has no
+    Var reaching past its own binders).  So the type + proof computed once in the empty
+    context are exactly what inlining would produce at any use site -- the htdef theorem
+    is g-polymorphic for the same reason an opaque lemma's htop is.  Lazy: a def gets an
+    htdef only the first time it is actually TYPED (one never typed stays a plain def, no
+    new failure mode -- this is reached iff the old `prove_ht(DEFS[name], ctx)` was)."""
+    if name not in DEF_HT:
+        ty, proof = prove_ht(DEFS[name], [])           # type the closed body ONCE
+        DEF_HT[name] = (ty, proof)                      # gen_*_block emits the htdef thm
+    ty = DEF_HT[name][0]
+    for canon, use in zip(DEFS_LVLS.get(name, ()), lvls):
+        ty = inst_level(ty, canon, use)                # specialise generic level params
+    # Reference is BARE (no level args): the htdef theorem's `(lv: lvl)` binders -- like
+    # its `(g: ctx)` -- are METAVARIABLES that MM0 unifies from the use-site conclusion
+    # `ht g (name lv..) ty`, exactly as the opaque-lemma htop reference does.  Passing
+    # them positionally is "too many arguments" (a theorem's args are its hypotheses).
+    return ty, f"(htdef_{name})"
+
 def prove_ht(e: T, ctx):
     """ctx is a list of de-Bruijn binder types, innermost LAST.
     Returns (type, proof) with proof : ht <ccons-of-ctx> e <type>."""
@@ -430,8 +466,8 @@ def prove_ht(e: T, ctx):
         for canon, use in zip(lvls, e.lvls):
             ty = inst_level(ty, canon, use)
         return ty, f"(htop_{e.san})"
-    if isinstance(e, DefRef):                          # delta-transparent: type via the
-        return prove_ht(_defref_unfold(e), ctx)        # unfolded body (MM0 delta-matches)
+    if isinstance(e, DefRef):                          # delta-transparent, but type ONCE:
+        return _ht_def_ref(e.san, e.lvls)              # reference htdef (opacity for defs)
     if isinstance(e, Const):
         # compare by NAME, not identity: a `tnat` inside a generated schema is a
         # fresh Const("tnat"), not the module singleton TNAT.
@@ -443,7 +479,7 @@ def prove_ht(e: T, ctx):
             # avoid.  Sound with no trusted axiom; see bridge.register_opaque for why
             # this beats inlining (blow-up) and an asserted ht-axiom (unsound).
             return OPAQUE[e.name][0], f"(htop_{e.name})"
-        if e.name in DEFS:    return prove_ht(DEFS[e.name], ctx)   # delta: type via body
+        if e.name in DEFS:    return _ht_def_ref(e.name)          # type ONCE; ref htdef
         if e.name == "tnat":  return ESort("(lS lz)"), "(ht_nat)"
         if e.name == "tzero": return TNAT, "(ht_zero)"
         if e.name == "tsucc": return EPi(TNAT, TNAT), "(ht_succ)"
@@ -469,12 +505,15 @@ def prove_ht(e: T, ctx):
     if isinstance(e, Var):
         return _ht_var(e.i, ctx)
     if isinstance(e, EPi):
-        ua, pa = prove_ht(e.dom, ctx)
-        ub, pb = prove_ht(e.body, ctx + [e.dom])
-        return ESort(f"(limax {ua.lvl} {ub.lvl})"), f"(ht_pi {pa} {pb})"
+        # ht_pi needs BOTH dom and body typed at a LITERAL esort.  _as_sort presents a
+        # stuck sort (e.g. a recursor-result `motive @ major`, or `tlist @ A`) as a real
+        # esort + coercion; for an already-literal sort it is identity (no regression).
+        ua, pa = _as_sort(e.dom, ctx)
+        ub, pb = _as_sort(e.body, ctx + [e.dom])
+        return ESort(f"(limax {ua} {ub})"), f"(ht_pi {pa} {pb})"
     if isinstance(e, Lam):
-        _ua, pa = prove_ht(e.ty, ctx)                 # ty is a type (esort u)
-        tb, pb = prove_ht(e.body, ctx + [e.ty])
+        _ua, pa = _as_sort(e.ty, ctx)                 # ht_lam needs dom at a literal esort
+        tb, pb = prove_ht(e.body, ctx + [e.ty])       # body type is arbitrary (not a sort)
         return EPi(e.ty, tb), f"(ht_lam {pa} {pb})"
     if isinstance(e, App):
         tf, pf = prove_ht(e.f, ctx)
@@ -504,14 +543,21 @@ def _ht_var(i, ctx):
 def _coerce(proof, have, want, ctx):
     if have == want:
         return proof
-    if _levels_unify(have, want):
-        # `want` becomes `have` by instantiating its free param levels (e.g. a
-        # recursor's motive kind `epi tnat (esort u)` matched against the
-        # concrete motive's `epi tnat (esort (lS lz))`).  MM0's ht_app unifies
-        # that bound level var on its side, so NO ht_conv is needed -- emit the
-        # proof bare, exactly as prove_rec_partial / prove_rec_partial_gen do.
-        # Fail-safe: if the param isn't actually a bound metavar at the use site,
-        # MM0 rejects the cert (both-checkers invariant) -- never a false accept.
+    if _levels_unify(have, want) or _levels_unify(want, have):
+        # The two terms agree structurally and differ only by a bound LEVEL
+        # parameter that one side leaves generic and the other pins.  Two
+        # directions:
+        #  - `want` has the param: a recursor's motive kind `epi tnat (esort u)`
+        #    matched against a concrete motive's `epi tnat (esort (lS lz))`.
+        #  - `have` has the param: a poly inductive applied at a CONCRETE level,
+        #    where the certifier carries the tycon's result level as the generic
+        #    `v` (e.g. `esort v` from `tlist @ tnat`) but MM0 has already unified
+        #    `v := 1` at the use site (the DecidableEq-over-List case).
+        # Either way MM0's ht_app unifies the bound level var on its side, so NO
+        # ht_conv is needed -- emit the proof bare, exactly as
+        # prove_rec_partial / prove_rec_partial_gen do.  Fail-safe: if the param
+        # isn't actually a bound metavar at the use site, MM0 rejects the cert
+        # (both-checkers invariant) -- never a false accept.
         return proof
     nf_have, cnf = prove_norm(have, ctx)              # have may hide a param match
     if nf_have != have and _levels_unify(nf_have, want):  # behind an unreduced redex
@@ -521,20 +567,27 @@ def _coerce(proof, have, want, ctx):
     want_sort = _prove_sort(want, ctx)                # ht ctx want (esort k)
     return f"(ht_conv {proof} {conv or '(deq_refl)'} {want_sort})"
 
-def _prove_sort(B: T, ctx) -> str:
-    """Proof of `ht ctx B (esort k)` for some concrete k -- B is a type.  This is
-    ht_conv's well-formedness premise.  prove_ht(B) may give B's sort as an
-    unreduced recursor-result redex (e.g. a sort-valued `brec`'s result type
-    `brec_motive @ major` rather than a literal sort -- bool_dec_eq); normalise it
-    to a literal `esort` and coerce, so MM0 sees a real sort (not `esort != eapp`)."""
+def _as_sort(B: T, ctx):
+    """Type a TYPE B and present its sort as a LITERAL esort: returns (level_str,
+    proof) with proof : ht ctx B (esort level_str).  prove_ht(B) may give B's sort as
+    an unreduced recursor-result redex (e.g. a sort-valued `brec`'s result type
+    `brec_motive @ major`, or `tlist @ A` whose sort is a stuck app rather than a
+    literal sort); normalise it to a literal `esort` and coerce, so MM0 sees a real
+    sort (not `esort != eapp`).  Used wherever an axiom premise must be esort-shaped:
+    ht_conv's well-formedness premise (_prove_sort) and the dom/body of ht_pi/ht_lam."""
     tB, pB = prove_ht(B, ctx)
     if isinstance(tB, ESort):
-        return pB
+        return tB.lvl, pB
     nf, c = prove_norm(tB, ctx)
     if isinstance(nf, ESort):
         _u, sortp = prove_ht(nf, ctx)                 # ht ctx (esort k) (esort (lS k))
-        return f"(ht_conv {pB} {c or '(deq_refl)'} {sortp})"
+        return nf.lvl, f"(ht_conv {pB} {c or '(deq_refl)'} {sortp})"
     raise ValueError(f"type's sort did not normalise to esort: {pp(B)} : {pp(tB)}")
+
+def _prove_sort(B: T, ctx) -> str:
+    """Proof of `ht ctx B (esort k)` for some concrete k (ht_conv's well-formedness
+    premise).  Thin wrapper over _as_sort, discarding the level."""
+    return _as_sort(B, ctx)[1]
 
 # ---- level unification: does `want` become `have` by instantiating want's params?
 def _unify_lvl(ph, pw, subst):
@@ -669,14 +722,28 @@ def gen_def_block() -> str:
     `(name lv..)` is a well-formed mm0 def application."""
     out = []
     for name, body in DEFS.items():
-        lvb = "".join(f" ({l}: lvl)" for l in DEFS_LVLS.get(name, ()))
-        out.append(f"def {name}{lvb}: expr = $ {pp(body)} $;\n")
+        out.append(_emit_defht(name) + "\n" if name in DEF_HT else
+                   _emit_def(name) + "\n")
     return "".join(out)
 
 
 def _emit_def(name) -> str:
     lvb = "".join(f" ({l}: lvl)" for l in DEFS_LVLS.get(name, ()))
     return f"def {name}{lvb}: expr = $ {pp(DEFS[name])} $;"
+
+def _emit_defht(name) -> str:
+    """A def that is typed ONCE: emit the `def` (for delta-unfold / computation) PLUS a
+    `htdef_<name> (g: ctx): ht g <name> <type>` typing theorem, proved once, that every
+    use of the def references.  Mirror of _emit_opaque, but the def is delta-TRANSPARENT
+    (it is in DEFS), so the htdef states the typing of the FOLDED def name (which mm0
+    delta-unfolds to the body the proof is about) -- mono `<name>`, or `(<name> lv..)` for
+    a universe-poly def at a generic level (the level binders are unified syntactically)."""
+    lvls = DEFS_LVLS.get(name, ())
+    lvb  = "".join(f" ({l}: lvl)" for l in lvls)
+    ty, proof = DEF_HT[name]
+    head = f"({name} {' '.join(lvls)})" if lvls else name
+    return (f"def {name}{lvb}: expr = $ {pp(DEFS[name])} $;\n"
+            f"theorem htdef_{name}{lvb} (g: ctx): $ ht g {head} {pp(ty)} $ =\n'{proof};")
 
 def _emit_opaque(name) -> str:
     ty, body, proof, lvls = OPAQUE[name]
@@ -700,9 +767,18 @@ def gen_all_blocks() -> str:
     stream (EMIT_ORDER), so a def that cites an opaque lemma -- or an opaque lemma whose
     body cites a def -- is always declared after its dependencies.  Replaces the three
     separate gen_*_block calls (which couldn't satisfy def<->opaque interdependence).
-    Inductive blocks (bridge.IND_EMITTED) are emitted separately, BEFORE this."""
-    emit = {"def": _emit_def, "opaque": _emit_opaque, "axiom": _emit_axiom}
-    out = [emit[kind](name) for kind, name in EMIT_ORDER]
+    Inductive blocks (bridge.IND_EMITTED) are emitted separately, BEFORE this.
+
+    Dispatch is by REGISTRY membership, not the stored kind tag, so a def that
+    prove_ht lazily promoted to opacity-for-defs (san now in DEF_HT, still tagged
+    "def" in EMIT_ORDER) emits its `def` + `htdef` theorem -- no EMIT_ORDER mutation
+    needed.  DEF_HT is checked first since a typed def is in both DEFS and DEF_HT."""
+    def _emit_one(san):
+        if san in DEF_HT: return _emit_defht(san)
+        if san in AXIOMS: return _emit_axiom(san)
+        if san in OPAQUE: return _emit_opaque(san)
+        return _emit_def(san)
+    out = [_emit_one(san) for _kind, san in EMIT_ORDER]
     return "\n".join(out) + ("\n" if out else "")
 
 
