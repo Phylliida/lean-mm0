@@ -223,10 +223,12 @@ def to_db(e) -> object:
         if _ENV is not None and _ENV.has(e.name) \
            and type(_ENV.get(e.name)).__name__ == "Definition":
             return register_def(_ENV, e.name, e.levels)
-        # lazy: an opaque `theorem` (a cited lemma) -> register for by-reference typing
+        # lazy: an opaque `theorem` (a cited lemma) -> register for by-reference typing.
+        # Pass the use-site levels so a UNIVERSE-POLYMORPHIC lemma cited at concrete
+        # levels (e.g. my_eq_symm.{1}) is monomorphised, exactly as a poly def is.
         if _ENV is not None and _ENV.has(e.name) \
            and type(_ENV.get(e.name)).__name__ == "Theorem":
-            return register_opaque(_ENV, e.name)
+            return register_opaque(_ENV, e.name, e.levels)
         raise Unsupported(f"Const {e.name!r} (outside the bridged fragments)")
     raise Unsupported(f"{type(e).__name__}")
 
@@ -298,7 +300,7 @@ def register_def(env, name, levels=()):
     return CONST_MAP[name]
 
 
-def register_opaque(env, name):
+def register_opaque(env, name, levels=()):
     r"""Register a `theorem` (an OPAQUE proof) as an opaque lemma, so a proof that
     CITES it can be certified.  Emitted as an mm0 def + a once-checked
     `htop_<name>` typing theorem (db_cert.gen_opaque_block); every USE of the lemma
@@ -335,17 +337,44 @@ def register_opaque(env, name):
         That is the stock-MM0 analogue of the production verifier's dedicated
         opaque-def-typing rule -- but reached with db.mm1 unchanged.
 
-    Monomorphic only: a universe-polymorphic lemma's `htop` would need level binders
-    (threading them through the cached reference is a further step), so a poly
-    theorem stays Unsupported here."""
+    UNIVERSE-POLYMORPHIC lemmas: a poly `theorem` cited at CONCRETE use-site levels
+    (e.g. `my_eq_symm.{1}`) is MONOMORPHISED here -- the body/type are
+    level-instantiated into a closed term and registered as a distinct closed opaque
+    lemma per level-tag (`my_eq_symm_1`), exactly as `register_def` handles poly defs.
+    This reuses all the closed-body machinery above (the `htop` stays context- AND
+    level-closed).  Citing a poly lemma at a *generic* level (inside ANOTHER poly
+    proof) is a further step -- its `htop` would need `(lv_u: lvl)` binders and a
+    level-applied def reference -- and stays Unsupported for now."""
     global _ENV
     _ENV = env
     d = env.get(name)
     if type(d).__name__ != "Theorem":
         raise Unsupported(f"{name!r} is not a Theorem ({type(d).__name__})")
-    if d.level_params:
-        raise Unsupported(f"opaque lemma {name!r} is universe-polymorphic")
-    san = sanitize(name)
+
+    if d.level_params:                        # universe-polymorphic: monomorphise at `levels`
+        if len(levels) != len(d.level_params):
+            raise Unsupported(f"{name!r} needs {len(d.level_params)} levels, got {len(levels)}")
+        if any(_level_has_param(l) for l in levels):
+            raise Unsupported(f"opaque lemma {name!r} cited at a GENERIC level "
+                              f"(level-generic htop not yet supported)")
+        key = (name, tuple(level_to_str(l) for l in levels))
+        if key in MONO:
+            return MONO[key]
+        san = sanitize(name) + "_" + "_".join(str(level_to_nat(l)) for l in levels)
+        body = E.inst_levels(d.value, d.level_params, tuple(levels))
+        ty   = E.inst_levels(d.type_, d.level_params, tuple(levels))
+        MONO[key] = TConst(san)               # placeholder first (breaks cycles)
+        try:                                  # ...rolled back on failure, like register_def
+            tyd   = to_db(ty)                 # closed now -> rides every existing
+            bodyd = to_db(body)               # closed-opaque path unchanged
+            tb, pb = db_cert.prove_ht(bodyd, [])
+            proof  = db_cert._coerce(pb, tb, tyd, [])
+            db_cert.OPAQUE[san] = (tyd, bodyd, proof)
+        except Exception:
+            MONO.pop(key, None); db_cert.OPAQUE.pop(san, None); raise
+        return MONO[key]
+
+    san = sanitize(name)                      # monomorphic (unchanged)
     if san in db_cert.OPAQUE:
         return TConst(san)
     CONST_MAP[name] = TConst(san)            # placeholder first (maps name -> san)
