@@ -14,9 +14,9 @@ outside the trust boundary.
 | Tests | **126 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 59 parser examples) |
 | Total source | ~7.6 kLoC Python + 188 LoC MM0 prelude + 3542 LoC `.lean` examples (59 files) |
 | Trusted base | `src/mm0_verify.py` (710 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 160 commits on `master`; clean working tree |
+| Repo | 163 commits on `master`; clean working tree |
 | Dev shell | `shell.nix` provides PyPy + CPython + bootstrapped `.venv` with pytest + xdist; tests in ~1.5 min on a multi-core box |
-| Stock-MM0 experiment | `experiments/stock_mm0_cert/` — certifying-emitter proof-of-concept: drop our βιζ evaluator, certify against **stock MM0** instead.  Now certifies not only reductions but **whole elaborated proofs** — induction, universe-polymorphism (defs, opaque lemmas, and inductives all at generic levels), and modular opaque-lemma chains; the whole-corpus coverage **sweep is saturated** (every `Eq` obligation certifies) (see section at end) |
+| Stock-MM0 experiment | `experiments/stock_mm0_cert/` — certifying-emitter proof-of-concept: drop our βιζ evaluator, certify against **stock MM0** instead.  Now certifies not only reductions but **whole elaborated proofs** — induction, universe-polymorphism (defs, opaque lemmas, and inductives all at generic levels), and modular opaque-lemma chains; the `Eq` sweep is **saturated**, and **whole-environment certification** re-typechecks 322/325 of *all* elaborated declarations (not just `Eq` goals) (see section at end) |
 
 ## What the pipeline does
 
@@ -1149,16 +1149,35 @@ faithfulness-guarded by cross-checking the `db_cert` normal form against
   → `lv_u`, which `induct.generate` auto-detects and binds) and used by **plain const
   names — no level-application node at all**.  A shared `_ind_tag(levels)` returns `g`
   for a generic registration, the numeral tag otherwise.  No trusted-base change.
+- **Whole-ENVIRONMENT certification** (`envcert_worker.py` / `envcert_sweep.py` /
+  `envcert_demo.py`).  The strongest form of the thesis: not "do this file's `Eq`
+  *obligations* certify?" but "does the 815-line stock base re-typecheck **every
+  declaration** the kernel elaborated?"  For each decl with a body, certify `ht cnil
+  <value> <type>` — the kernel's *own* typing, re-derived as an explicit stock-MM0
+  proof, checked by **both** mm0-rs and mm0-c, faithful by construction (term and type
+  are the kernel's).  This reaches **non-equational** propositions for free: `Nat.le`
+  reflexivity/transitivity (induction over the indexed inductive), decidability via
+  `Decidable.rec`, typeclass methods, plain data.  Remarkably it needed **zero**
+  bridge/db_cert/trusted-base changes — purely a new harness over the existing
+  `prove_ht`; everything the universe-polymorphism / opaque-lemma / `DefRef` work built
+  is exactly what makes an arbitrary declaration typeable.  Run `envcert_sweep.py` for
+  live numbers; at writing, **322 of 325** declarations across the 40 elaborated files
+  re-typecheck end-to-end (39 files fully), both-checkers invariant holding.  (Enabler:
+  generated **List/Vec are now universe-polymorphic** too — element + container at a
+  level variable `v` matching the kernel's `List.{u} (α : Sort u) : Sort u`, so poly
+  `map`/`length`/`append`/`Vec_length` no longer demand `leveq u 1`.)
 
-**Still open / honest limits.**  The whole-proof track is **wired into the sweep**, and
-all three universe-polymorphic-at-a-generic-level cases (def, opaque lemma, inductive)
-are closed — so **the sweep is now SATURATED: every `Eq` obligation in the elaborated
-corpus certifies** (by de-refl conversion or whole-proof typing), all files fully, zero
-skips, both-checkers invariant holding.  What remains is *new* source shapes, not gaps
-in the existing corpus: poly inductives *other* than `Eq` registered eagerly (List/Vec
-are still spec'd monomorphic at `Sort 1` — a one-line spec change, since the generator
-auto-detects); mutual inductives; indexed `Nat.le`; or replacing `src/emitter.py`'s
-`de-refl` shortcut in the *production* pipeline.  So this
+**Still open / honest limits.**  The `Eq`-obligation sweep is SATURATED (149/149, every
+`Eq` goal by de-refl conversion or whole-proof typing), and whole-environment
+certification re-typechecks **322 of 325** declarations.  The remaining 3 are proofs
+that rest on a **user-declared `axiom`** (`hop.lean`'s `Eq.substI`, asserted in the
+source with no body): certifying those means carrying the user's axiom as an *explicit
+assumption* in the certificate — faithful (the user's own development assumes it), with
+db.mm1 still unchanged — a **distinct semantic mode** ("certify *modulo the user's
+axioms*") that should be labelled crisply rather than blurred with proved typing, so it
+is left as its own deliberate next step.  Other *new* source shapes (not gaps in the
+existing corpus): mutual inductives; indexed `Nat.le` registered eagerly; or replacing
+`src/emitter.py`'s `de-refl` shortcut in the *production* pipeline.  So this
 remains a **parallel proof-of-concept** that certifies real obligations from real
 elaborated source — not the production trusted base.  (Moving βιζ + shift/subst1 out
 of the production trusted base needs that last wiring step.)
@@ -1190,6 +1209,8 @@ experiment `README.md`):
   `poly_def_gen_demo.py` (a universe-poly `def` at a GENERIC level — `mysym.{u}` via a
   `DefRef` that δ-unfolds), `poly_ind_gen_demo.py` (a universe-poly *inductive* at a
   GENERIC level — `structure Box.{u}`, registered level-generically),
+  `envcert_demo.py` (whole-environment cert: NON-equational decls — `Nat.le`
+  reflexivity/transitivity over the indexed inductive, `choose` via `Decidable.rec`),
   `run_levels.py`, `capstone_demo.py`.
 - whole-suite coverage: `python3 coverage_sweep.py` — runs `coverage_worker.py`
   over every `examples/*.lean` (subprocess per file, detector = `Eq A` over any
@@ -1199,3 +1220,8 @@ experiment `README.md`):
   is **saturated**), and **asserts** the invariant that every file with a certified
   obligation passes both mm0-rs and mm0-c (exits non-zero otherwise).  `coverage.md`
   describes the method; run the sweep for the current spread.
+- whole-ENVIRONMENT coverage: `python3 envcert_sweep.py` — the stronger sibling: runs
+  `envcert_worker.py` over every `examples/*.lean` and reports how many of *all*
+  elaborated declarations (not just `Eq` goals) the stock base re-typechecks by typing
+  `ht cnil value type`.  Same per-file table + invariant; names its own next target
+  (`unsup:Eq.substI` — the user-axiom frontier above).
