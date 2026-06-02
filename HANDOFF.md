@@ -14,7 +14,7 @@ outside the trust boundary.
 | Tests | **126 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 59 parser examples) |
 | Total source | ~7.6 kLoC Python + 188 LoC MM0 prelude + 3542 LoC `.lean` examples (59 files) |
 | Trusted base | `src/mm0_verify.py` (710 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 165 commits on `master`; clean working tree |
+| Repo | 167 commits on `master`; clean working tree |
 | Dev shell | `shell.nix` provides PyPy + CPython + bootstrapped `.venv` with pytest + xdist; tests in ~1.5 min on a multi-core box |
 | Stock-MM0 experiment | `experiments/stock_mm0_cert/` — certifying-emitter proof-of-concept: drop our βιζ evaluator, certify against **stock MM0** instead.  Now certifies not only reductions but **whole elaborated proofs** — induction, universe-polymorphism (defs, opaque lemmas, inductives all at generic levels), modular opaque-lemma chains, and proofs *modulo* source axioms; **whole-environment certification re-typechecks all 325/325 elaborated declarations** by the 815-line stock base. `mm0_verify.py` is now legacy — moving to stock MM0 entirely (see section at end) |
 
@@ -88,6 +88,7 @@ lean-mm0/
 ├── scripts/
 │   └── profile_test.py    cProfile a single parser test; dumps .pstats
 ├── shell.nix           Nix dev shell: PyPy + CPython + bootstrapped .venv
+├── verify.py           ← stock-MM0 verifier entry point (successor to mm0_verify.py)
 └── run_all.py          single entry point: runs all 4 test files
 ```
 
@@ -96,6 +97,15 @@ To run everything:
 ```bash
 $ cd lean-mm0
 $ python run_all.py
+```
+
+To **verify a Lean file against stock MM0** (the new direction — no Python evaluator
+in the trusted base; trusted = `db.mm1` + the 815-line stock checker):
+
+```bash
+$ python3 verify.py examples/math.lean      # ✓ VERIFIED ... N declarations; axioms: none
+$ python3 verify.py --all                   # sweep examples/ (40 verified, the rest a
+                                            #   build_stdlib harness gap, not failures)
 ```
 
 For fastest iteration, use the Nix dev shell (PyPy + xdist):
@@ -1196,12 +1206,17 @@ elaborates across the 40 standalone-elaborating files is re-typechecked end-to-e
 815-line stock base, both checkers, with assumed source axioms carried + reported.  **The
 CIC trusted base (db.mm1) is unchanged throughout.**
 
-**Remaining toward the swap:** (1) a first-class `verify`-a-`.lean`-file entry point
-(promote `envcert` out of `experiments/`); (2) wire it into `run_all.py` / the test suite
-in place of `mm0_verify.py`; (3) the ~19 files that don't elaborate under the standalone
-`build_stdlib` need the fuller shared stdlib (a harness gap, not a certifier gap).  Other
-*new* source shapes (orthogonal): mutual inductives; quotient types (`Quot`).  (Moving
-βιζ + shift/subst1 out of the production trusted base is now down to that wiring.)
+**Remaining toward the swap:** (1) ✅ **DONE — a first-class `verify.py`** entry point:
+`python3 verify.py FILE.lean` runs the pipeline, certifies every decl against `db.mm1`,
+checks with both stock checkers, and prints a verdict + assumed-axiom report (`--all`
+verified 40/40 of the standalone-elaborating corpus).  It uses `envcert_worker` as the
+per-file engine; promoting that engine out of `experiments/` is a later tidy-up.  (2)
+wire `verify.py` into `run_all.py` / the test suite in place of `mm0_verify.py`, then
+retire `mm0_verify.py` + the `lean.mm0` emitter path; (3) the ~19 files that don't
+elaborate under the standalone `build_stdlib` need the fuller shared stdlib (a harness
+gap, not a certifier gap).  Other *new* source shapes (orthogonal): mutual inductives;
+quotient types (`Quot`).  (Moving βιζ + shift/subst1 out of the production trusted base
+is now down to that wiring.)
 
 **Reproduce — and how the numbers are sourced.**  This section deliberately
 states *capabilities, not counts*: figures (proof-node sizes, how many
