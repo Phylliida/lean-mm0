@@ -26,7 +26,7 @@ if ROOT not in sys.path:
 from src import expr as E
 import db_cert
 import induct
-from db_cert import Var, App as TApp, Lam as TLam, Const as TConst, ESort, EPi, OpaqueRef
+from db_cert import Var, App as TApp, Lam as TLam, Const as TConst, ESort, EPi, OpaqueRef, DefRef
 
 
 class Unsupported(Exception):
@@ -264,20 +264,45 @@ def register_def(env, name, levels=()):
     level-instantiated (inst_levels) into a closed term, keyed by (name, levels)
     in MONO under a sanitized name carrying the level tag (id_poly.{1} -> id_poly_1).
     Either way the bridged body lands in db_cert.DEFS, so delta rides mm0's native
-    def-unfold and adds NO trusted axiom.  Idempotent."""
+    def-unfold and adds NO trusted axiom.  Idempotent.
+
+    A poly def used at a GENERIC level (e.g. `Eq.symm.{u}` inside a `.{u}` proof)
+    can't be monomorphised -- it is registered as ONE level-bound def `<name>_g
+    (lv_u: lvl)` (body bridged in its OWN level params -> lv_u), returned as a DefRef
+    that delta-unfolds with the use-site level substituted.  The exact def analogue
+    of the universe-polymorphic opaque-lemma path (register_opaque), but transparent
+    rather than opaque.  Still no trusted axiom, no trusted-base change."""
     global _ENV
     _ENV = env
     d = env.get(name)
     if type(d).__name__ != "Definition":
         raise Unsupported(f"{name!r} is not a Definition ({type(d).__name__})")
 
-    if d.level_params:                       # polymorphic: monomorphise at `levels`
+    if d.level_params:                       # polymorphic
         if len(levels) != len(d.level_params):
             raise Unsupported(f"{name!r} needs {len(d.level_params)} levels, got {len(levels)}")
         key = (name, tuple(level_to_str(l) for l in levels))
         if key in MONO:
             return MONO[key]
-        body = E.inst_levels(d.value, d.level_params, tuple(levels))
+
+        if any(_level_has_param(l) for l in levels):     # GENERIC level: level-bound def
+            use_lvls = tuple(level_to_str(l) for l in levels)
+            canon    = tuple(level_param_name(p) for p in d.level_params)
+            san      = sanitize(name) + "_g"             # canonical, param-agnostic
+            ref = DefRef(san, use_lvls)
+            MONO[key] = ref
+            if san in db_cert.DEFS:                       # registered once; reuse
+                return ref
+            try:                                          # body bridged in the def's OWN
+                _register_mono_deps(env, name, d.value)   # params (-> lv_u), level-generic
+                db_cert.DEFS[san] = to_db(d.value)
+                db_cert.DEFS_LVLS[san] = canon
+            except Exception:
+                MONO.pop(key, None); db_cert.DEFS.pop(san, None)
+                db_cert.DEFS_LVLS.pop(san, None); raise
+            return ref
+
+        body = E.inst_levels(d.value, d.level_params, tuple(levels))   # concrete: monomorphise
         san = sanitize(name) + "_" + "_".join(str(level_to_nat(l)) for l in levels)
         MONO[key] = TConst(san)              # placeholder first (breaks cycles)
         try:                                 # ...but roll it back on failure, so a

@@ -37,6 +37,16 @@ class OpaqueRef(T):                  # a UNIVERSE-POLYMORPHIC opaque lemma cited
                                     # A MONOMORPHIC / concrete-level opaque lemma stays
                                     # a plain Const(san) (no level args) -- this node is
                                     # only for the level-generic case.
+@dataclass(frozen=True)
+class DefRef(T):                     # a UNIVERSE-POLYMORPHIC *def* used at a GENERIC
+    san: str                        # level: the def is an mm0 def WITH level binders
+    lvls: tuple                     # (`def san (lv_u: lvl): expr = body`), so a use is
+                                    # `(san lvl..)` -- an mm0 def application of the
+                                    # level args.  UNLIKE OpaqueRef, a def is delta-
+                                    # TRANSPARENT, so this UNFOLDS to body[lvls] in
+                                    # whnf / prove_ht (typed via the unfolded body, MM0
+                                    # delta-matches the folded `(san lvl..)`).  A mono /
+                                    # concrete-level def stays a plain Const(san).
 
 TNAT, TZERO, TSUCC, TREC = Const("tnat"), Const("tzero"), Const("tsucc"), Const("trec")
 
@@ -48,6 +58,10 @@ REC_OF  = {}   # recursor name    -> ind
 ATOMIC  = set()  # every generated atomic const name (for shf/sub closure)
 DEFS    = {}   # def const name -> body T  (delta-unfold rides mm0's native
                # def-unfold; adds NO trusted axiom -- see gen_def_block)
+DEFS_LVLS = {} # def name -> tuple of LEVEL binder names, for a UNIVERSE-POLYMORPHIC
+               # def used at a GENERIC level (emitted `def san (lv: lvl): expr = body`,
+               # referenced as a DefRef -> `(san lv..)`).  Absent for a mono def (no
+               # level binders).  See gen_def_block / bridge.register_def.
 OPAQUE  = {}   # opaque-lemma name -> (type T, body T, htop-proof str, lvls tuple).  A
                # `theorem` (opaque proof) is checked ONCE -- emitted as an mm0 `def`
                # plus a `htop_<name> (g: ctx): ht g <body> <type>` theorem
@@ -72,7 +86,7 @@ def pp(t: T) -> str:
     if isinstance(t, EPi):   return f"(epi {pp(t.dom)} {pp(t.body)})"
     if isinstance(t, ESort): return f"(esort {t.lvl})"
     if isinstance(t, Const): return t.name
-    if isinstance(t, OpaqueRef):                # mm0 def application of the level args
+    if isinstance(t, (OpaqueRef, DefRef)):      # mm0 def application of the level args
         return t.san if not t.lvls else f"({t.san} {' '.join(t.lvls)})"
     raise TypeError(t)
 
@@ -140,6 +154,11 @@ def prove_shf(e: T, d: int, c: int):
         b2, pb = prove_shf(body, d, c)            # so the body's shf proof serves any level
         assert b2 == body, f"opaque {e.san} body not shift-closed"
         return e, pb
+    if isinstance(e, DefRef):                     # poly def = closed body -> shift-invariant
+        body = DEFS[e.san]
+        b2, pb = prove_shf(body, d, c)
+        assert b2 == body, f"def {e.san} body not shift-closed"
+        return e, pb
     raise TypeError(e)
 
 # ---------------- subst certificate:  sub b v j b' ----------------
@@ -177,6 +196,11 @@ def prove_sub(b: T, v: T, j: int):
         b2, pb = prove_sub(body, v, j)
         assert b2 == body, f"opaque {b.san} body not subst-closed"
         return b, pb
+    if isinstance(b, DefRef):                     # poly def = closed body -> subst-invariant
+        body = DEFS[b.san]
+        b2, pb = prove_sub(body, v, j)
+        assert b2 == body, f"def {b.san} body not subst-closed"
+        return b, pb
     if isinstance(b, Var):
         if b.i == j:
             v2, ps = prove_shf(v, j, 0)
@@ -208,6 +232,15 @@ def _is_nat(e: T, name: str) -> bool:
     for Nat (generated inductives are sanitized + unique), so this is unambiguous."""
     return isinstance(e, Const) and e.name == name
 
+def _defref_unfold(e: "DefRef") -> T:
+    """A DefRef `(san lvls)` unfolds to its canonical body with the canonical level
+    binders replaced by the use-site levels -- the exact term mm0's def-unfold yields
+    for `(san lvls)`, so any proof generated from it delta-matches the folded ref."""
+    body = DEFS[e.san]
+    for canon, use in zip(DEFS_LVLS[e.san], e.lvls):
+        body = inst_level(body, canon, use)
+    return body
+
 def whnf(e: T, ctx=None):
     """Weak-head reduce; return (wh, conv|None) with conv proving deq G e wh.
     `ctx` (de-Bruijn binder types, innermost LAST) is threaded ONLY so the iota
@@ -219,6 +252,8 @@ def whnf(e: T, ctx=None):
     if isinstance(e, Const) and e.name in DEFS:
         return whnf(DEFS[e.name], ctx)      # delta: unfold def -> body (free via
                                             # mm0 def-unfold; proof stays about body)
+    if isinstance(e, DefRef):
+        return whnf(_defref_unfold(e), ctx) # delta: unfold the level-bound def too
     if not isinstance(e, App):
         return e, None
     f_wh, cf = whnf(e.f, ctx)
@@ -354,6 +389,8 @@ def prove_ht(e: T, ctx):
         for canon, use in zip(lvls, e.lvls):
             ty = inst_level(ty, canon, use)
         return ty, f"(htop_{e.san})"
+    if isinstance(e, DefRef):                          # delta-transparent: type via the
+        return prove_ht(_defref_unfold(e), ctx)        # unfolded body (MM0 delta-matches)
     if isinstance(e, Const):
         # compare by NAME, not identity: a `tnat` inside a generated schema is a
         # fresh Const("tnat"), not the module singleton TNAT.
@@ -584,8 +621,14 @@ def gen_def_block() -> str:
     """Emit a stock-MM0 `def` for every registered def, so delta-unfolding is
     mm0's OWN native def-unfold -- no trusted axiom per definition.  Emitted in
     insertion order; the caller registers dependencies (inductives, earlier
-    defs) before the defs that use them."""
-    return "".join(f"def {name}: expr = $ {pp(body)} $;\n" for name, body in DEFS.items())
+    defs) before the defs that use them.  A UNIVERSE-POLYMORPHIC def used at a
+    generic level carries `(lv: lvl)` binders (DEFS_LVLS), so a DefRef use
+    `(name lv..)` is a well-formed mm0 def application."""
+    out = []
+    for name, body in DEFS.items():
+        lvb = "".join(f" ({l}: lvl)" for l in DEFS_LVLS.get(name, ()))
+        out.append(f"def {name}{lvb}: expr = $ {pp(body)} $;\n")
+    return "".join(out)
 
 
 def gen_opaque_block() -> str:
