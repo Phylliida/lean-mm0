@@ -515,8 +515,21 @@ def _expr_to_N(e, stack, iname):
     raise Unsupported(f"inductive type node {type(e).__name__}")
 
 
+def _ind_tag(levels) -> str:
+    """Level tag identifying an inductive registration.  A numeral-joined tag for
+    CONCRETE levels (`Prod.{1,1}` -> `1_1`), or `g` when ANY level is GENERIC: a poly
+    inductive at a generic level is registered ONCE, level-generically -- its term
+    constructors are level-agnostic (the levels ride the generated typing / iota axioms
+    via induct.generate's auto-detection, exactly as for the poly `Eq`), so a use needs
+    no level args.  Both register_inductive and _try_inductive_const tag the same way."""
+    if any(_level_has_param(l) for l in levels):
+        return "g"
+    return "_".join(str(level_to_nat(l)) for l in levels)
+
+
 def register_inductive(env, iname, levels):
-    """Derive + emit + register a kernel Inductive (monomorphised at `levels`).
+    """Derive + emit + register a kernel Inductive (monomorphised at `levels`, or
+    registered level-generically when `levels` contains a universe parameter).
     Idempotent.  Covers parametric inductives whose constructor fields are
     non-recursive (records: classes/structures like Add/Mul/Pair -- the dominant
     skip cluster) and, in general, the recursive/indexed shapes induct.py
@@ -526,11 +539,14 @@ def register_inductive(env, iname, levels):
     ind = env.get(iname)
     if type(ind).__name__ != "Inductive":
         raise Unsupported(f"{iname!r} is not an Inductive")
-    tag = "_".join(str(level_to_nat(l)) for l in levels)
+    tag = _ind_tag(levels)
     if (iname, tag) in _IND_REG:
         return
     lp = ind.level_params
-    inst = (lambda e: E.inst_levels(e, lp, tuple(levels))) if lp else (lambda e: e)
+    # generic (tag == "g"): keep the inductive's OWN level params (-> lv_u in the
+    # bridged types; induct.generate detects + binds them on the typing axioms).
+    inst = (lambda e: E.inst_levels(e, lp, tuple(levels))) \
+        if (lp and tag != "g") else (lambda e: e)
     P, X = ind.num_params, ind.num_indices
     san = lambda nm: sanitize(nm) + ("_" + tag if tag else "")
 
@@ -594,5 +610,4 @@ def _try_inductive_const(name, levels):
     else:
         return None
     register_inductive(_ENV, iname, tlevels)
-    tag = "_".join(str(level_to_nat(l)) for l in tlevels)
-    return IND_CONST.get((name, tag))
+    return IND_CONST.get((name, _ind_tag(tlevels)))
