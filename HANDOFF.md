@@ -14,9 +14,9 @@ outside the trust boundary.
 | Tests | **126 passing** across 4 files (7 kernel smoke + 3 emit basic + 57-test suite + 59 parser examples) |
 | Total source | ~7.6 kLoC Python + 188 LoC MM0 prelude + 3542 LoC `.lean` examples (59 files) |
 | Trusted base | `src/mm0_verify.py` (710 LoC) + `prelude/cic.mm0` (188 LoC) |
-| Repo | 151 commits on `master`; clean working tree |
+| Repo | 155 commits on `master`; clean working tree |
 | Dev shell | `shell.nix` provides PyPy + CPython + bootstrapped `.venv` with pytest + xdist; tests in ~1.5 min on a multi-core box |
-| Stock-MM0 experiment | `experiments/stock_mm0_cert/` — certifying-emitter proof-of-concept: drop our βιζ evaluator, certify against **stock MM0** instead.  Now certifies not only reductions but **whole elaborated proofs** — induction, universe-polymorphism, and modular opaque-lemma chains (see section at end) |
+| Stock-MM0 experiment | `experiments/stock_mm0_cert/` — certifying-emitter proof-of-concept: drop our βιζ evaluator, certify against **stock MM0** instead.  Now certifies not only reductions but **whole elaborated proofs** — induction, universe-polymorphism, and modular opaque-lemma chains (including **universe-polymorphic** lemmas cited by reference) (see section at end) |
 
 ## What the pipeline does
 
@@ -1100,17 +1100,35 @@ faithfulness-guarded by cross-checking the `db_cert` normal form against
   `htop` theorem is valid in any context.  This is the stock-MM0 analogue of the
   production verifier's opaque-def-typing rule, reached with the pieces already in
   db.mm1.  (`bridge.register_opaque`; both workers emit `gen_opaque_block`.)
+- **Universe-polymorphic opaque lemmas** (`poly_opaque_demo.py`, `poly_opaque_gen_demo.py`).
+  A poly `theorem` cited by reference, two cases.  (a) at a **concrete** level
+  (`my_eq_symm.{1}`) — MONOMORPHISED, exactly as a poly *def* is: body/type
+  level-instantiated into a closed term, registered as a distinct closed opaque lemma
+  per level-tag (`my_eq_symm_1`), riding every closed-opaque path unchanged.  (b) at a
+  **generic** level inside *another* poly proof (`symm_symm.{u}` citing `my_eq_symm.{u}`)
+  — the lemma can never be monomorphised, so its typing is proved **once, generically
+  over all universes**, and referenced.  This is the exact **dual, for levels**, of the
+  opacity trick: a closed body's typing is context-polymorphic (`g` a metavariable) so
+  one `htop (g: ctx)` serves every site; a *generic* body's typing is in addition
+  **level-polymorphic** (db.mm1's `ht_sort`/`deq_refl` already bind a level metavariable),
+  so the same `prove_ht` proof, with `(lv_u: lvl)` bound on the htop, types it at every
+  use level.  Mechanism: a new `OpaqueRef(san, lvls)` db_cert node (an mm0 def
+  *application* of the level args, `(my_eq_symm_g lv_u)` — not a CIC eapp); the def and
+  `htop` carry `(lv_u: lvl)` binders and the htop is stated over the *folded* reference
+  so use sites unify the levels syntactically.  **No trusted axiom, no trusted-base
+  change** — db.mm1 byte-identical; the level binder lives on the generated def/htop,
+  checked like everything else.  Certified by **both** checkers (`symm_symm.{u}` 348
+  nodes; the lemma typed once at 1078, cited twice by reference).
 
 **Still open / honest limits.**  The de-refl-obligation fragment is **saturated** for
 the elaborated corpus (only `not-convertible` skips remain there), and the whole-proof
 track now certifies closed, self-contained proofs *using the IH*, monomorphic **and
-level-polymorphic**, **and proofs that cite (monomorphic) opaque lemmas by reference**
-(above).  What that track does **not** yet cover: a **universe-polymorphic** opaque
-lemma (its `htop` would need level binders — threading them through a cached reference
-is a further step); poly inductives *other* than `Eq` (List/Vec are still spec'd
-monomorphic at `Sort 1` — making them poly is now just a one-line spec change, since
-the generator auto-detects); and integration into the *sweep* (typing every
-not-convertible decl).  Also still open: mutual inductives; indexed `Nat.le`; or
+level-polymorphic**, **and proofs that cite opaque lemmas by reference — monomorphic
+lemmas, and universe-polymorphic lemmas at both concrete and generic levels** (above).
+What that track does **not** yet cover: poly inductives *other* than `Eq` (List/Vec are
+still spec'd monomorphic at `Sort 1` — making them poly is now just a one-line spec
+change, since the generator auto-detects); and integration into the *sweep* (typing
+every not-convertible decl).  Also still open: mutual inductives; indexed `Nat.le`; or
 replacing `src/emitter.py`'s `de-refl` shortcut in the *production* pipeline.  So this
 remains a **parallel proof-of-concept** that certifies real obligations from real
 elaborated source — not the production trusted base.  (Moving βιζ + shift/subst1 out
@@ -1136,6 +1154,10 @@ experiment `README.md`):
   `Bool.not_not`, level-poly `my_eq_symm.{u}`, … — typed via `ht cnil body type`),
   `opaque_demo.py` (modular proofs: a cited `theorem` lemma typed ONCE, used by
   reference — `add 0 n = n` cited twice stays small),
+  `poly_opaque_demo.py` (a universe-poly `theorem` cited at a CONCRETE level
+  `my_eq_symm.{1}`, monomorphised + typed once by reference),
+  `poly_opaque_gen_demo.py` (a universe-poly `theorem` cited at a GENERIC level —
+  `symm_symm.{u}` citing `my_eq_symm.{u}` — typed once, level-generically, by reference),
   `run_levels.py`, `capstone_demo.py`.
 - whole-suite coverage: `python3 coverage_sweep.py` — runs `coverage_worker.py`
   over every `examples/*.lean` (subprocess per file, detector = `Eq A` over any
