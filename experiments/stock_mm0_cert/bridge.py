@@ -26,7 +26,7 @@ if ROOT not in sys.path:
 from src import expr as E
 import db_cert
 import induct
-from db_cert import Var, App as TApp, Lam as TLam, Const as TConst, ESort, EPi
+from db_cert import Var, App as TApp, Lam as TLam, Const as TConst, ESort, EPi, OpaqueRef
 
 
 class Unsupported(Exception):
@@ -337,30 +337,56 @@ def register_opaque(env, name, levels=()):
         That is the stock-MM0 analogue of the production verifier's dedicated
         opaque-def-typing rule -- but reached with db.mm1 unchanged.
 
-    UNIVERSE-POLYMORPHIC lemmas: a poly `theorem` cited at CONCRETE use-site levels
-    (e.g. `my_eq_symm.{1}`) is MONOMORPHISED here -- the body/type are
-    level-instantiated into a closed term and registered as a distinct closed opaque
-    lemma per level-tag (`my_eq_symm_1`), exactly as `register_def` handles poly defs.
-    This reuses all the closed-body machinery above (the `htop` stays context- AND
-    level-closed).  Citing a poly lemma at a *generic* level (inside ANOTHER poly
-    proof) is a further step -- its `htop` would need `(lv_u: lvl)` binders and a
-    level-applied def reference -- and stays Unsupported for now."""
+    UNIVERSE-POLYMORPHIC lemmas, two cases:
+
+    (a) cited at a CONCRETE use-site level (e.g. `my_eq_symm.{1}`) -- MONOMORPHISED:
+        the body/type are level-instantiated into a CLOSED term and registered as a
+        distinct closed opaque lemma per level-tag (`my_eq_symm_1`), exactly as
+        `register_def` handles poly defs.  Reuses all the closed-body machinery above
+        (def + htop stay context- AND level-closed; cited by a plain Const).
+
+    (b) cited at a GENERIC level, inside ANOTHER poly proof (e.g. `symm_symm.{u}`
+        citing `my_eq_symm.{u}`) -- the lemma's body/type are bridged in the LEMMA's
+        OWN level params (rendered `lv_u` by the open-level path), and the def + htop
+        carry `(lv_u: lvl)` binders.  The dual of case (3) for LEVELS: just as a
+        closed body's typing is context-polymorphic (g a metavariable), a generic
+        body's typing is LEVEL-polymorphic -- db.mm1's ht_sort/deq_refl already bind a
+        level metavariable, so the SAME prove_ht proof, with lv bound on the htop,
+        types it at every use level.  A use is an OpaqueRef -> `(my_eq_symm_g lv..)`,
+        whose levels MM0 unifies syntactically against the htop's folded conclusion.
+        Still no trusted axiom, no trusted-base change."""
     global _ENV
     _ENV = env
     d = env.get(name)
     if type(d).__name__ != "Theorem":
         raise Unsupported(f"{name!r} is not a Theorem ({type(d).__name__})")
 
-    if d.level_params:                        # universe-polymorphic: monomorphise at `levels`
+    if d.level_params:                        # universe-polymorphic
         if len(levels) != len(d.level_params):
             raise Unsupported(f"{name!r} needs {len(d.level_params)} levels, got {len(levels)}")
-        if any(_level_has_param(l) for l in levels):
-            raise Unsupported(f"opaque lemma {name!r} cited at a GENERIC level "
-                              f"(level-generic htop not yet supported)")
         key = (name, tuple(level_to_str(l) for l in levels))
         if key in MONO:
             return MONO[key]
-        san = sanitize(name) + "_" + "_".join(str(level_to_nat(l)) for l in levels)
+
+        if any(_level_has_param(l) for l in levels):     # (b) cited at a GENERIC level
+            use_lvls = tuple(level_to_str(l) for l in levels)
+            canon    = tuple(level_param_name(p) for p in d.level_params)
+            san      = sanitize(name) + "_g"             # canonical, param-agnostic
+            ref = OpaqueRef(san, use_lvls)
+            MONO[key] = ref
+            if san in db_cert.OPAQUE:                     # registered once; reuse
+                return ref
+            try:                                          # bridge in the lemma's OWN
+                tyd   = to_db(d.type_)                    # params (-> lv_u), level-generic
+                bodyd = to_db(d.value)
+                tb, pb = db_cert.prove_ht(bodyd, [])
+                proof  = db_cert._coerce(pb, tb, tyd, [])
+                db_cert.OPAQUE[san] = (tyd, bodyd, proof, canon)
+            except Exception:
+                MONO.pop(key, None); db_cert.OPAQUE.pop(san, None); raise
+            return ref
+
+        san = sanitize(name) + "_" + "_".join(str(level_to_nat(l)) for l in levels)  # (a) concrete
         body = E.inst_levels(d.value, d.level_params, tuple(levels))
         ty   = E.inst_levels(d.type_, d.level_params, tuple(levels))
         MONO[key] = TConst(san)               # placeholder first (breaks cycles)
@@ -369,7 +395,7 @@ def register_opaque(env, name, levels=()):
             bodyd = to_db(body)               # closed-opaque path unchanged
             tb, pb = db_cert.prove_ht(bodyd, [])
             proof  = db_cert._coerce(pb, tb, tyd, [])
-            db_cert.OPAQUE[san] = (tyd, bodyd, proof)
+            db_cert.OPAQUE[san] = (tyd, bodyd, proof, ())
         except Exception:
             MONO.pop(key, None); db_cert.OPAQUE.pop(san, None); raise
         return MONO[key]
@@ -383,7 +409,7 @@ def register_opaque(env, name, levels=()):
         body = to_db(d.value)                # (defs via register_def, nested lemmas
         tb, pb = db_cert.prove_ht(body, [])  #  via register_opaque -- so OPAQUE/DEFS
         proof = db_cert._coerce(pb, tb, ty, [])   # land in dependency order)
-        db_cert.OPAQUE[san] = (ty, body, proof)   # check the body ONCE
+        db_cert.OPAQUE[san] = (ty, body, proof, ())   # check the body ONCE
     except Exception:
         CONST_MAP.pop(name, None); db_cert.OPAQUE.pop(san, None); raise
     return CONST_MAP[name]

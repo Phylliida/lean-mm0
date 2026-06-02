@@ -27,6 +27,16 @@ class Const(T): name: str
 class ESort(T): lvl: str            # esort l   (l a level string: "lz", "(lS lz)")
 @dataclass(frozen=True)
 class EPi(T): dom: T; body: T       # epi DOMAIN BODY
+@dataclass(frozen=True)
+class OpaqueRef(T):                  # a UNIVERSE-POLYMORPHIC opaque lemma cited at a
+    san: str                        # GENERIC level: the lemma is an mm0 def WITH level
+    lvls: tuple                     # binders, so a use is `(san lvl..)` -- an mm0 def
+                                    # application of the level args, NOT a CIC eapp.
+                                    # pp -> "(san l1 l2)"; types by REFERENCE to the
+                                    # level-bound htop (MM0 unifies the bound levels).
+                                    # A MONOMORPHIC / concrete-level opaque lemma stays
+                                    # a plain Const(san) (no level args) -- this node is
+                                    # only for the level-generic case.
 
 TNAT, TZERO, TSUCC, TREC = Const("tnat"), Const("tzero"), Const("tsucc"), Const("trec")
 
@@ -38,14 +48,19 @@ REC_OF  = {}   # recursor name    -> ind
 ATOMIC  = set()  # every generated atomic const name (for shf/sub closure)
 DEFS    = {}   # def const name -> body T  (delta-unfold rides mm0's native
                # def-unfold; adds NO trusted axiom -- see gen_def_block)
-OPAQUE  = {}   # opaque-lemma name -> (type T, body T, htop-proof str).  A `theorem`
-               # (opaque proof) is checked ONCE -- emitted as an mm0 `def` plus a
-               # `htop_<name> (g: ctx): ht g <body> <type>` theorem (g-polymorphic,
-               # since a closed body's typing never pins the context) -- and every
-               # USE of the lemma types by REFERENCE to that theorem, never re-typing
-               # the body.  This is true opacity (modular proofs), with NO trusted
-               # axiom: the lemma's typing is proved, not asserted.  See
-               # gen_opaque_block / bridge.register_opaque.
+OPAQUE  = {}   # opaque-lemma name -> (type T, body T, htop-proof str, lvls tuple).  A
+               # `theorem` (opaque proof) is checked ONCE -- emitted as an mm0 `def`
+               # plus a `htop_<name> (g: ctx): ht g <body> <type>` theorem
+               # (g-polymorphic, since a closed body's typing never pins the context) --
+               # and every USE of the lemma types by REFERENCE to that theorem, never
+               # re-typing the body.  This is true opacity (modular proofs), with NO
+               # trusted axiom: the lemma's typing is proved, not asserted.  `lvls` is
+               # the tuple of LEVEL binders the lemma's body/type are generic in -- ()
+               # for a monomorphic or concrete-monomorphised lemma (def + htop closed,
+               # cited by a plain Const), or e.g. ("lv_u",) for a UNIVERSE-POLYMORPHIC
+               # lemma cited at a generic level (def + htop carry `(lv_u: lvl)` binders
+               # and a use is an OpaqueRef -> `(san lv_u)`).  See gen_opaque_block /
+               # bridge.register_opaque.
 
 def natlit(n: int) -> str:
     return "nO" if n == 0 else f"(nS {natlit(n-1)})"
@@ -57,6 +72,8 @@ def pp(t: T) -> str:
     if isinstance(t, EPi):   return f"(epi {pp(t.dom)} {pp(t.body)})"
     if isinstance(t, ESort): return f"(esort {t.lvl})"
     if isinstance(t, Const): return t.name
+    if isinstance(t, OpaqueRef):                # mm0 def application of the level args
+        return t.san if not t.lvls else f"({t.san} {' '.join(t.lvls)})"
     raise TypeError(t)
 
 def uncurry(t: T):
@@ -118,6 +135,11 @@ def prove_shf(e: T, d: int, c: int):
             return Var(0), "(shf_var_S0)"
         j_term, p = prove_shf(Var(e.i-1), d, c-1)   # j_term is Var(j)
         return Var(j_term.i + 1), f"(shf_var_SS {p})"
+    if isinstance(e, OpaqueRef):                  # poly opaque lemma = closed def -> invariant
+        body = OPAQUE[e.san][1]                    # the canonical body (shf is level-agnostic,
+        b2, pb = prove_shf(body, d, c)            # so the body's shf proof serves any level
+        assert b2 == body, f"opaque {e.san} body not shift-closed"
+        return e, pb
     raise TypeError(e)
 
 # ---------------- subst certificate:  sub b v j b' ----------------
@@ -150,6 +172,11 @@ def prove_sub(b: T, v: T, j: int):
         return EPi(t2, bd2), f"(sub_pi {pt} {pb})"
     if isinstance(b, ESort):
         return b, "(sub_sort)"
+    if isinstance(b, OpaqueRef):                  # poly opaque lemma = closed def -> invariant
+        body = OPAQUE[b.san][1]
+        b2, pb = prove_sub(body, v, j)
+        assert b2 == body, f"opaque {b.san} body not subst-closed"
+        return b, pb
     if isinstance(b, Var):
         if b.i == j:
             v2, ps = prove_shf(v, j, 0)
@@ -318,6 +345,15 @@ def prove_ht(e: T, ctx):
     Returns (type, proof) with proof : ht <ccons-of-ctx> e <type>."""
     if isinstance(e, ESort):
         return ESort(f"(lS {e.lvl})"), "(ht_sort)"
+    if isinstance(e, OpaqueRef):                       # poly opaque lemma cited at a
+        # generic level: type by REFERENCE to the LEVEL-bound htop, MM0 unifies the
+        # bound levels from the conclusion (`(san lv..)` appears in both htop and use).
+        # The lemma's stored type is in its canonical level params; specialise it to
+        # the use-site levels (inst_level per param) so ht_app sees the right type.
+        ty, _b, _p, lvls = OPAQUE[e.san]
+        for canon, use in zip(lvls, e.lvls):
+            ty = inst_level(ty, canon, use)
+        return ty, f"(htop_{e.san})"
     if isinstance(e, Const):
         # compare by NAME, not identity: a `tnat` inside a generated schema is a
         # fresh Const("tnat"), not the module singleton TNAT.
@@ -565,11 +601,22 @@ def gen_opaque_block() -> str:
     (reintroduces the super-linear blow-up opacity exists to avoid) and why an
     asserted `ht g L T` axiom would be UNSOUND (untyped deq breaks subject
     conversion).  The trick that needs no trusted axiom: a closed body's typing
-    proof is context-polymorphic, so one `htop` theorem serves every use site."""
+    proof is context-polymorphic, so one `htop` theorem serves every use site.
+
+    A UNIVERSE-POLYMORPHIC lemma (lvls != ()) additionally carries `(lv: lvl)`
+    binders on BOTH the def and the htop, so it is also LEVEL-polymorphic: the def
+    is `def <name> (lv..): expr = body`, and the htop states the typing of the
+    FOLDED reference `(name lv..)` (which delta-unfolds to body) so a use site
+    unifies the bound levels SYNTACTICALLY against its own `(name lv..)`."""
     out = []
-    for name, (ty, body, proof) in OPAQUE.items():
-        out.append(f"def {name}: expr = $ {pp(body)} $;")
-        out.append(f"theorem htop_{name} (g: ctx): $ ht g {pp(body)} {pp(ty)} $ =\n"
+    for name, (ty, body, proof, lvls) in OPAQUE.items():
+        lvb  = "".join(f" ({l}: lvl)" for l in lvls)        # level binders, or ""
+        # the term whose typing htop states: the FOLDED `(name lv..)` for a poly
+        # lemma (syntactic level-unification at use sites), or the raw body for a
+        # monomorphic one (proof matches the stated conclusion verbatim).
+        head = f"({name} {' '.join(lvls)})" if lvls else pp(body)
+        out.append(f"def {name}{lvb}: expr = $ {pp(body)} $;")
+        out.append(f"theorem htop_{name}{lvb} (g: ctx): $ ht g {head} {pp(ty)} $ =\n"
                    f"'{proof};")
     return "\n".join(out) + ("\n" if out else "")
 
